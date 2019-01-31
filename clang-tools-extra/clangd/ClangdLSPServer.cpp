@@ -353,7 +353,8 @@ void ClangdLSPServer::onInitialize(const InitializeParams &Params,
     CompileCommandsDir = Dir;
   if (UseDirBasedCDB) {
     BaseCDB = llvm::make_unique<DirectoryBasedGlobalCompilationDatabase>(
-        CompileCommandsDir);
+        CompileCommandsDir,
+        Params.initializationOptions.compilationDatabaseMap);
     BaseCDB = getQueryDriverDatabase(
         llvm::makeArrayRef(ClangdServerOpts.QueryDriverGlobs),
         std::move(BaseCDB));

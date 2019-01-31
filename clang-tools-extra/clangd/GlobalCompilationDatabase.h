@@ -11,6 +11,7 @@
 
 #include "Function.h"
 #include "Path.h"
+#include "Protocol.h"
 #include "clang/Tooling/CompilationDatabase.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringMap.h"
@@ -66,7 +67,8 @@ class DirectoryBasedGlobalCompilationDatabase
     : public GlobalCompilationDatabase {
 public:
   DirectoryBasedGlobalCompilationDatabase(
-      llvm::Optional<Path> CompileCommandsDir);
+      llvm::Optional<Path> CompileCommandsDir,
+      llvm::Optional<CompilationDatabaseMap> CDBMap);
   ~DirectoryBasedGlobalCompilationDatabase() override;
 
   /// Scans File's parents looking for compilation databases.
@@ -109,6 +111,8 @@ private:
   /// Used for command argument pointing to folder where compile_commands.json
   /// is located.
   llvm::Optional<Path> CompileCommandsDir;
+
+  llvm::Optional<CompilationDatabaseMap> CDBMap;
 };
 
 /// Extracts system include search path from drivers matching QueryDriverGlobs
