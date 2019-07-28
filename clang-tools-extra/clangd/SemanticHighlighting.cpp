@@ -103,7 +103,7 @@ public:
     if (ND->getDeclName().getNameKind() != DeclarationName::Identifier)
       return true;
 
-    addToken(ND->getLocation(), ND);
+    addToken(ND->getLocation(), ND, /*IsDeclaration=*/true);
     return true;
   }
 
@@ -114,12 +114,6 @@ public:
       return true;
 
     addToken(Ref->getLocation(), Ref->getDecl());
-    return true;
-  }
-
-  bool VisitTypedefNameDecl(TypedefNameDecl *TD) {
-    if (const auto *TSI = TD->getTypeSourceInfo())
-      addType(TD->getLocation(), TSI->getTypeLoc().getTypePtr());
     return true;
   }
 
@@ -141,6 +135,11 @@ public:
     // structs. It also makes us not highlight certain namespace qualifiers
     // twice. For elaborated types the actual type is highlighted as an inner
     // TypeLoc.
+    if (TL.getTypeLocClass() == TypeLoc::TypeLocClass::Typedef) {
+      TypedefTypeLoc TTL = TL.castAs<TypedefTypeLoc>();
+      addToken(TTL.getNameLoc(), TTL.getTypedefNameDecl());
+      return true;
+    }
     if (TL.getTypeLocClass() != TypeLoc::TypeLocClass::Elaborated)
       addType(TL.getBeginLoc(), TL.getTypePtr());
     return true;
@@ -186,13 +185,18 @@ private:
       addToken(Loc, TD);
   }
 
-  void addToken(SourceLocation Loc, const NamedDecl *D) {
+  void addToken(SourceLocation Loc, const NamedDecl *D,
+                bool IsDeclaration = false) {
     if (D->getDeclName().isIdentifier() && D->getName().empty())
       // Don't add symbols that don't have any length.
       return;
     // We highlight class decls, constructor decls and destructor decls as
     // `Class` type. The destructor decls are handled in `VisitTypeLoc` (we will
     // visit a TypeLoc where the underlying Type is a CXXRecordDecl).
+    if (isa<TypedefNameDecl>(D)) {
+      addToken(Loc, HighlightingKind::Typedef);
+      return;
+    }
     if (isa<ClassTemplateDecl>(D)) {
       addToken(Loc, HighlightingKind::Class);
       return;
@@ -205,8 +209,14 @@ private:
       addToken(Loc, HighlightingKind::Class);
       return;
     }
-    if (isa<CXXMethodDecl>(D)) {
-      addToken(Loc, HighlightingKind::Method);
+    if (const CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(D)) {
+      if (MD->isStatic()) {
+        addToken(Loc, IsDeclaration ? HighlightingKind::StaticMethodDeclaration
+                                    : HighlightingKind::StaticMethod);
+        return;
+      }
+      addToken(Loc, IsDeclaration ? HighlightingKind::MethodDeclaration
+                                  : HighlightingKind::Method);
       return;
     }
     if (isa<FieldDecl>(D)) {
@@ -225,12 +235,21 @@ private:
       addToken(Loc, HighlightingKind::Parameter);
       return;
     }
-    if (isa<VarDecl>(D)) {
+    if (const VarDecl *VD = dyn_cast<VarDecl>(D)) {
+      if (VD->isStaticDataMember()) {
+        addToken(Loc, HighlightingKind::StaticField);
+        return;
+      }
+      if (VD->isLocalVarDecl()) {
+        addToken(Loc, HighlightingKind::LocalVariable);
+        return;
+      }
       addToken(Loc, HighlightingKind::Variable);
       return;
     }
     if (isa<FunctionDecl>(D)) {
-      addToken(Loc, HighlightingKind::Function);
+      addToken(Loc, IsDeclaration ? HighlightingKind::FunctionDeclaration
+                                  : HighlightingKind::Function);
       return;
     }
     if (isa<NamespaceDecl>(D)) {
@@ -452,6 +471,20 @@ llvm::StringRef toTextMateScope(HighlightingKind Kind) {
     return "entity.name.type.template.cpp";
   case HighlightingKind::Primitive:
     return "storage.type.primitive.cpp";
+  case HighlightingKind::LocalVariable:
+    return "variable.other.local.cpp";
+  case HighlightingKind::StaticField:
+    return "variable.other.field.static.cpp";
+  case HighlightingKind::StaticMethod:
+    return "entity.name.function.method.static.cpp";
+  case HighlightingKind::Typedef:
+    return "entity.name.type.typedef.cpp";
+  case HighlightingKind::FunctionDeclaration:
+    return "entity.name.function.declaration.cpp";
+  case HighlightingKind::MethodDeclaration:
+    return "entity.name.function.method.declaration.cpp";
+  case HighlightingKind::StaticMethodDeclaration:
+    return "entity.name.function.method.static.declaration.cpp";
   case HighlightingKind::NumKinds:
     llvm_unreachable("must not pass NumKinds to the function");
   }

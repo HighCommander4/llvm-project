@@ -35,6 +35,13 @@ enum class HighlightingKind {
   Namespace,
   TemplateParameter,
   Primitive,
+  LocalVariable,
+  StaticField,
+  StaticMethod,
+  Typedef,
+  FunctionDeclaration,
+  MethodDeclaration,
+  StaticMethodDeclaration,
 
   NumKinds,
 };
