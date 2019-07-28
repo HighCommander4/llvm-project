@@ -44,7 +44,8 @@ bool canHighlightName(DeclarationName Name) {
 }
 
 llvm::Optional<HighlightingKind> kindForType(const Type *TP);
-llvm::Optional<HighlightingKind> kindForDecl(const NamedDecl *D) {
+llvm::Optional<HighlightingKind> kindForDecl(const NamedDecl *D,
+                                             bool IsDeclaration = false) {
   if (auto *USD = dyn_cast<UsingShadowDecl>(D)) {
     if (auto *Target = USD->getTargetDecl())
       D = Target;
@@ -72,9 +73,14 @@ llvm::Optional<HighlightingKind> kindForDecl(const NamedDecl *D) {
   if (isa<ClassTemplateDecl>(D) || isa<RecordDecl>(D) ||
       isa<CXXConstructorDecl>(D))
     return HighlightingKind::Class;
-  if (auto *MD = dyn_cast<CXXMethodDecl>(D))
-    return MD->isStatic() ? HighlightingKind::StaticMethod
-                          : HighlightingKind::Method;
+  if (auto *MD = dyn_cast<CXXMethodDecl>(D)) {
+    if (MD->isStatic()) {
+      return IsDeclaration ? HighlightingKind::StaticMethodDeclaration
+                           : HighlightingKind::StaticMethod;
+    }
+    return IsDeclaration ? HighlightingKind::MethodDeclaration
+                         : HighlightingKind::Method;
+  }
   if (isa<FieldDecl>(D))
     return HighlightingKind::Field;
   if (isa<EnumDecl>(D))
@@ -91,7 +97,8 @@ llvm::Optional<HighlightingKind> kindForDecl(const NamedDecl *D) {
   if (isa<BindingDecl>(D))
     return HighlightingKind::Variable;
   if (isa<FunctionDecl>(D))
-    return HighlightingKind::Function;
+    return IsDeclaration ? HighlightingKind::FunctionDeclaration
+                         : HighlightingKind::Function;
   if (isa<NamespaceDecl>(D) || isa<NamespaceAliasDecl>(D) ||
       isa<UsingDirectiveDecl>(D))
     return HighlightingKind::Namespace;
@@ -119,7 +126,7 @@ llvm::Optional<HighlightingKind> kindForReference(const ReferenceLoc &R) {
   for (const NamedDecl *Decl : R.Targets) {
     if (!canHighlightName(Decl->getDeclName()))
       return llvm::None;
-    auto Kind = kindForDecl(Decl);
+    auto Kind = kindForDecl(Decl, R.IsDecl);
     if (!Kind || (Result && Kind != Result))
       return llvm::None;
     Result = Kind;
@@ -400,6 +407,12 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, HighlightingKind K) {
     return OS << "Primitive";
   case HighlightingKind::Macro:
     return OS << "Macro";
+  case HighlightingKind::FunctionDeclaration:
+    return OS << "FunctionDeclaration";
+  case HighlightingKind::MethodDeclaration:
+    return OS << "MethodDeclaration";
+  case HighlightingKind::StaticMethodDeclaration:
+    return OS << "StaticMethodDeclaration";
   case HighlightingKind::InactiveCode:
     return OS << "InactiveCode";
   }
@@ -544,6 +557,12 @@ llvm::StringRef toTextMateScope(HighlightingKind Kind) {
     return "storage.type.primitive.cpp";
   case HighlightingKind::Macro:
     return "entity.name.function.preprocessor.cpp";
+  case HighlightingKind::FunctionDeclaration:
+    return "entity.name.function.declaration.cpp";
+  case HighlightingKind::MethodDeclaration:
+    return "entity.name.function.method.declaration.cpp";
+  case HighlightingKind::StaticMethodDeclaration:
+    return "entity.name.function.method.static.declaration.cpp";
   case HighlightingKind::InactiveCode:
     return "meta.disabled";
   }
