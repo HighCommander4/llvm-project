@@ -481,5 +481,18 @@ llvm::StringRef toTextMateScope(HighlightingKind Kind) {
   llvm_unreachable("unhandled HighlightingKind");
 }
 
+std::vector<Range> getInactiveRegions(ParsedAST &AST) {
+  std::vector<Range> Result;
+  const SourceManager &SM = AST.getSourceManager();
+  for (const SourceRange &R :
+       AST.getPreprocessor().getPreprocessingRecord()->getSkippedRanges()) {
+    if (isInsideMainFile(R.getBegin(), SM)) {
+      Result.push_back({sourceLocToPosition(SM, R.getBegin()),
+                        sourceLocToPosition(SM, R.getEnd())});
+    }
+  }
+  return Result;
+}
+
 } // namespace clangd
 } // namespace clang

@@ -56,9 +56,10 @@ namespace {
 // Update the FileIndex with new ASTs and plumb the diagnostics responses.
 struct UpdateIndexCallbacks : public ParsingCallbacks {
   UpdateIndexCallbacks(FileIndex *FIndex, DiagnosticsConsumer &DiagConsumer,
-                       bool SemanticHighlighting)
+                       bool SemanticHighlighting, bool CollectInactiveRegions)
       : FIndex(FIndex), DiagConsumer(DiagConsumer),
-        SemanticHighlighting(SemanticHighlighting) {}
+        SemanticHighlighting(SemanticHighlighting),
+        CollectInactiveRegions(CollectInactiveRegions) {}
 
   void onPreambleAST(PathRef Path, ASTContext &Ctx,
                      std::shared_ptr<clang::Preprocessor> PP,
@@ -73,13 +74,18 @@ struct UpdateIndexCallbacks : public ParsingCallbacks {
 
     std::vector<Diag> Diagnostics = AST.getDiagnostics();
     std::vector<HighlightingToken> Highlightings;
+    std::vector<Range> InactiveRegions;
     if (SemanticHighlighting)
       Highlightings = getSemanticHighlightings(AST);
+    if (CollectInactiveRegions)
+      InactiveRegions = getInactiveRegions(AST);
 
     Publish([&]() {
       DiagConsumer.onDiagnosticsReady(Path, std::move(Diagnostics));
       if (SemanticHighlighting)
         DiagConsumer.onHighlightingsReady(Path, std::move(Highlightings));
+      if (CollectInactiveRegions)
+        DiagConsumer.onInactiveRegionsReady(Path, std::move(InactiveRegions));
     });
   }
 
@@ -96,6 +102,7 @@ private:
   FileIndex *FIndex;
   DiagnosticsConsumer &DiagConsumer;
   bool SemanticHighlighting;
+  bool CollectInactiveRegions;
 };
 } // namespace
 
@@ -126,8 +133,10 @@ ClangdServer::ClangdServer(const GlobalCompilationDatabase &CDB,
       // critical paths.
       WorkScheduler(
           CDB, Opts.AsyncThreadsCount, Opts.StorePreamblesInMemory,
-          std::make_unique<UpdateIndexCallbacks>(DynamicIdx.get(), DiagConsumer,
-                                                 Opts.SemanticHighlighting),
+          std::make_unique<UpdateIndexCallbacks>(
+              DynamicIdx.get(), DiagConsumer, Opts.SemanticHighlighting,
+              /*CollectInactiveRegions=*/true), // TODO(nridge): allow proper
+                                                // configuration
           Opts.UpdateDebounce, Opts.RetentionPolicy) {
   // Adds an index to the stack, at higher priority than existing indexes.
   auto AddIndex = [&](SymbolIndex *Idx) {

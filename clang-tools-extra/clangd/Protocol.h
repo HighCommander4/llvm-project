@@ -1245,6 +1245,15 @@ struct SelectionRange {
 };
 llvm::json::Value toJSON(const SelectionRange &);
 
+/// Parameters for the inactive regions (server-side) push notification.
+struct InactiveRegionsParams {
+  /// The textdocument these inactive regions belong to.
+  TextDocumentIdentifier TextDocument;
+  /// The inactive regions that should be sent.
+  std::vector<Range> InactiveRegions;
+};
+llvm::json::Value toJSON(const InactiveRegionsParams &InactiveRegions);
+
 } // namespace clangd
 } // namespace clang
 

@@ -1086,5 +1086,12 @@ llvm::json::Value toJSON(const SelectionRange &Out) {
   }
   return llvm::json::Object{{"range", Out.range}};
 }
+
+llvm::json::Value toJSON(const InactiveRegionsParams &InactiveRegions) {
+  return llvm::json::Object{
+      {"textDocument", InactiveRegions.TextDocument},
+      {"regions", std::move(InactiveRegions.InactiveRegions)}};
+}
+
 } // namespace clangd
 } // namespace clang

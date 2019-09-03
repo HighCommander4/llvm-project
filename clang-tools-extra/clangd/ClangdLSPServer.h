@@ -58,6 +58,8 @@ private:
   void
   onHighlightingsReady(PathRef File,
                        std::vector<HighlightingToken> Highlightings) override;
+  void onInactiveRegionsReady(PathRef File,
+                              std::vector<Range> InactiveRegions) override;
 
   // LSP methods. Notifications have signature void(const Params&).
   // Calls have signature void(const Params&, Callback<Response>).
@@ -126,6 +128,9 @@ private:
 
   /// Sends a "publishSemanticHighlighting" notification to the LSP client.
   void publishSemanticHighlighting(SemanticHighlightingParams Params);
+
+  /// Sends a "publishInactiveRegions" notification to the LSP client.
+  void publishInactiveRegions(InactiveRegionsParams Params);
 
   /// Sends a "publishDiagnostics" notification to the LSP client.
   void publishDiagnostics(const URIForFile &File,

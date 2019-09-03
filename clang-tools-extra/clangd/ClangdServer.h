@@ -54,6 +54,10 @@ public:
   virtual void
   onHighlightingsReady(PathRef File,
                        std::vector<HighlightingToken> Highlightings) {}
+
+  /// Called by ClangdServer when some \p InactiveRegions for \p File are ready.
+  virtual void onInactiveRegionsReady(PathRef File,
+                                      std::vector<Range> InactiveRegions) {}
 };
 
 /// When set, used by ClangdServer to get clang-tidy options for each particular

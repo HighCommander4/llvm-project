@@ -88,6 +88,10 @@ std::vector<LineHighlightings>
 diffHighlightings(ArrayRef<HighlightingToken> New,
                   ArrayRef<HighlightingToken> Old);
 
+// Returns all inactive regions from an AST. Only generates inactive regions
+// for the main AST.
+std::vector<Range> getInactiveRegions(ParsedAST &AST);
+
 } // namespace clangd
 } // namespace clang
 

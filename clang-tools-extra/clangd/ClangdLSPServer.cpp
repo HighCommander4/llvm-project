@@ -1117,6 +1117,10 @@ void ClangdLSPServer::publishSemanticHighlighting(
   notify("textDocument/semanticHighlighting", Params);
 }
 
+void ClangdLSPServer::publishInactiveRegions(InactiveRegionsParams Params) {
+  notify("textDocument/inactiveRegions", Params);
+}
+
 void ClangdLSPServer::publishDiagnostics(
     const URIForFile &File, std::vector<clangd::Diagnostic> Diagnostics) {
   // Publish diagnostics.
@@ -1295,6 +1299,12 @@ void ClangdLSPServer::onHighlightingsReady(
   publishSemanticHighlighting(
       {{URIForFile::canonicalize(File, /*TUPath=*/File)},
        toSemanticHighlightingInformation(Diffed)});
+}
+
+void ClangdLSPServer::onInactiveRegionsReady(
+    PathRef File, std::vector<Range> InactiveRegions) {
+  publishInactiveRegions(
+      {{URIForFile::canonicalize(File, /*TUPath=*/File)}, InactiveRegions});
 }
 
 void ClangdLSPServer::onDiagnosticsReady(PathRef File,
