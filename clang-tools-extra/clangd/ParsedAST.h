@@ -97,13 +97,16 @@ public:
   /// (!) does not have tokens from the preamble.
   const syntax::TokenBuffer &getTokens() const { return Tokens; }
 
+  llvm::ArrayRef<SourceRange> getSkippedRanges() const { return SkippedRanges; }
+
 private:
   ParsedAST(std::shared_ptr<const PreambleData> Preamble,
             std::unique_ptr<CompilerInstance> Clang,
             std::unique_ptr<FrontendAction> Action, syntax::TokenBuffer Tokens,
             MainFileMacros Macros, std::vector<Decl *> LocalTopLevelDecls,
             std::vector<Diag> Diags, IncludeStructure Includes,
-            CanonicalIncludes CanonIncludes);
+            CanonicalIncludes CanonIncludes,
+            std::vector<SourceRange> SkippedRanges);
 
   // In-memory preambles must outlive the AST, it is important that this member
   // goes before Clang and Action.
@@ -130,6 +133,8 @@ private:
   std::vector<Decl *> LocalTopLevelDecls;
   IncludeStructure Includes;
   CanonicalIncludes CanonIncludes;
+  // Ranges skipped during preprocessing.
+  std::vector<SourceRange> SkippedRanges;
 };
 
 /// Build an AST from provided user inputs. This function does not check if

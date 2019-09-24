@@ -208,6 +208,23 @@ private:
   const LangOptions &LangOpts;
 };
 
+class CollectSkippedRanges : public PPCallbacks {
+public:
+  explicit CollectSkippedRanges(SourceManager &SM,
+                                std::vector<SourceRange> &SkippedRanges)
+      : SM(SM), SkippedRanges(SkippedRanges) {}
+
+  void SourceRangeSkipped(SourceRange Range, SourceLocation EndifLoc) override {
+    if (isInsideMainFile(Range.getBegin(), SM)) {
+      SkippedRanges.push_back(Range);
+    }
+  }
+
+private:
+  SourceManager &SM;
+  std::vector<SourceRange> &SkippedRanges;
+};
+
 } // namespace
 
 void dumpAST(ParsedAST &AST, llvm::raw_ostream &OS) {
@@ -348,6 +365,10 @@ ParsedAST::build(std::unique_ptr<clang::CompilerInvocation> CI,
   Clang->getPreprocessor().addPPCallbacks(
       std::make_unique<CollectMainFileMacros>(Clang->getSourceManager(),
                                               Clang->getLangOpts(), Macros));
+  std::vector<SourceRange> SkippedRanges;
+  Clang->getPreprocessor().addPPCallbacks(
+      std::make_unique<CollectSkippedRanges>(Clang->getSourceManager(),
+                                             SkippedRanges));
 
   // Copy over the includes from the preamble, then combine with the
   // non-preamble includes below.
@@ -403,7 +424,7 @@ ParsedAST::build(std::unique_ptr<clang::CompilerInvocation> CI,
   return ParsedAST(std::move(Preamble), std::move(Clang), std::move(Action),
                    std::move(Tokens), std::move(Macros), std::move(ParsedDecls),
                    std::move(Diags), std::move(Includes),
-                   std::move(CanonIncludes));
+                   std::move(CanonIncludes), std::move(SkippedRanges));
 }
 
 ParsedAST::ParsedAST(ParsedAST &&Other) = default;
@@ -491,12 +512,14 @@ ParsedAST::ParsedAST(std::shared_ptr<const PreambleData> Preamble,
                      syntax::TokenBuffer Tokens, MainFileMacros Macros,
                      std::vector<Decl *> LocalTopLevelDecls,
                      std::vector<Diag> Diags, IncludeStructure Includes,
-                     CanonicalIncludes CanonIncludes)
+                     CanonicalIncludes CanonIncludes,
+                     std::vector<SourceRange> SkippedRanges)
     : Preamble(std::move(Preamble)), Clang(std::move(Clang)),
       Action(std::move(Action)), Tokens(std::move(Tokens)),
       Macros(std::move(Macros)), Diags(std::move(Diags)),
       LocalTopLevelDecls(std::move(LocalTopLevelDecls)),
-      Includes(std::move(Includes)), CanonIncludes(std::move(CanonIncludes)) {
+      Includes(std::move(Includes)), CanonIncludes(std::move(CanonIncludes)),
+      SkippedRanges(std::move(SkippedRanges)) {
   assert(this->Clang);
   assert(this->Action);
 }

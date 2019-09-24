@@ -140,7 +140,7 @@ void checkDiffedHighlights(llvm::StringRef OldCode, llvm::StringRef NewCode) {
   }
   for (auto &LineTokens : ExpectedLines)
     ExpectedLinePairHighlighting.push_back(
-        {LineTokens.first, LineTokens.second});
+        {LineTokens.first, LineTokens.second, /*IsInactive = */ false});
 
   std::vector<LineHighlightings> ActualDiffed =
       diffHighlightings(NewTokens, OldTokens);
@@ -656,10 +656,12 @@ TEST(SemanticHighlighting, toSemanticHighlightingInformation) {
        {{HighlightingKind::Variable,
          Range{CreatePosition(3, 8), CreatePosition(3, 12)}},
         {HighlightingKind::Function,
-         Range{CreatePosition(3, 4), CreatePosition(3, 7)}}}},
+         Range{CreatePosition(3, 4), CreatePosition(3, 7)}}},
+       /* IsInactive = */ false},
       {1,
        {{HighlightingKind::Variable,
-         Range{CreatePosition(1, 1), CreatePosition(1, 5)}}}}};
+         Range{CreatePosition(1, 1), CreatePosition(1, 5)}}},
+       /* IsInactive = */ true}};
   std::vector<SemanticHighlightingInformation> ActualResults =
       toSemanticHighlightingInformation(Tokens);
   std::vector<SemanticHighlightingInformation> ExpectedResults = {

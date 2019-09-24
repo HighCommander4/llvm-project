@@ -158,6 +158,27 @@ public:
       // the end of the Tokens).
       TokRef = TokRef.drop_front(Conflicting.size());
     }
+    // Add inactive highlighting tokens.
+    const SourceManager &SM = AST.getSourceManager();
+    for (const SourceRange &R : AST.getSkippedRanges()) {
+      if (isInsideMainFile(R.getBegin(), SM)) {
+        // Create one token for each line in the skipped range, so it works
+        // with line-based diffing.
+        Position Begin = sourceLocToPosition(SM, R.getBegin());
+        Position End = sourceLocToPosition(SM, R.getEnd());
+        assert(Begin.line <= End.line);
+        for (int Line = Begin.line; Line < End.line; ++Line) {
+          // Don't bother computing the offset for the end of the line, just use
+          // zero. The client will treat this highlighting kind specially, and
+          // highlight the entire line visually (i.e. not just to where the text
+          // on the line ends, but to the end of the screen).
+          NonConflicting.push_back({HighlightingKind::InactiveCode,
+                                    {Position{Line, 0}, Position{Line, 0}}});
+        }
+      }
+    }
+    // Re-sort the tokens because that's what the diffing expects.
+    llvm::sort(NonConflicting);
     return NonConflicting;
   }
 
@@ -405,6 +426,8 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, HighlightingKind K) {
     return OS << "Primitive";
   case HighlightingKind::Macro:
     return OS << "Macro";
+  case HighlightingKind::InactiveCode:
+    return OS << "InactiveCode";
   }
   llvm_unreachable("invalid HighlightingKind");
 }
@@ -449,8 +472,24 @@ diffHighlightings(ArrayRef<HighlightingToken> New,
        LineNumber = NextLineNumber()) {
     NewLine = takeLine(New, NewLine.end(), LineNumber);
     OldLine = takeLine(Old, OldLine.end(), LineNumber);
-    if (NewLine != OldLine)
-      DiffedLines.push_back({LineNumber, NewLine});
+    if (NewLine != OldLine) {
+      DiffedLines.push_back({LineNumber, NewLine, /*IsInactive=*/false});
+
+      // Turn a HighlightingKind::InactiveCode token into the IsInactive flag.
+      // We do this by iterating over the tokens in the line, and if we find
+      // one with kind InactiveCode, removing that token and setting the
+      // IsInactive flag on the line instead.
+      auto &AddedLine = DiffedLines.back();
+      for (auto Iter = AddedLine.Tokens.begin();
+           Iter != AddedLine.Tokens.end();) {
+        if (Iter->Kind == HighlightingKind::InactiveCode) {
+          Iter = AddedLine.Tokens.erase(Iter);
+          AddedLine.IsInactive = true;
+        } else {
+          ++Iter;
+        }
+      }
+    }
   }
 
   return DiffedLines;
@@ -493,7 +532,7 @@ toSemanticHighlightingInformation(llvm::ArrayRef<LineHighlightings> Tokens) {
       write16be(static_cast<int>(Token.Kind), OS);
     }
 
-    Lines.push_back({Line.Line, encodeBase64(LineByteTokens)});
+    Lines.push_back({Line.Line, encodeBase64(LineByteTokens), Line.IsInactive});
   }
 
   return Lines;
@@ -538,6 +577,8 @@ llvm::StringRef toTextMateScope(HighlightingKind Kind) {
     return "storage.type.primitive.cpp";
   case HighlightingKind::Macro:
     return "entity.name.function.preprocessor.cpp";
+  case HighlightingKind::InactiveCode:
+    return "meta.disabled";
   }
   llvm_unreachable("unhandled HighlightingKind");
 }
