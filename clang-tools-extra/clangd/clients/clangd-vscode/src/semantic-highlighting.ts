@@ -161,10 +161,53 @@ export class Highlighter {
   // SemanticHighlightingToken with scopeIndex i should have the decoration at
   // index i in this list.
   private decorationTypes: vscode.TextEditorDecorationType[] = [];
+  private scopeToDecorationMap: Map<string, vscode.TextEditorDecorationType>;
   // The clangd TextMate scope lookup table.
   private scopeLookupTable: string[][];
   constructor(scopeLookupTable: string[][]) {
     this.scopeLookupTable = scopeLookupTable;
+  }
+  private makeDecorationType(color: string, underline: boolean, italic: boolean, bold: boolean): vscode.TextEditorDecorationType {
+    let opts: vscode.DecorationRenderOptions = {
+      color,
+      rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed
+    };
+    if (underline == true)
+      opts.textDecoration = 'underline';
+    if (italic == true)
+      opts.fontStyle = 'italic';
+    if (bold == true)
+      opts.fontWeight = 'bold';
+    return vscode.window.createTextEditorDecorationType(opts);
+  }
+  private setupDecorationMap() {
+    this.scopeToDecorationMap = new Map();
+
+    // Highlightings from upstream clangd.
+    this.scopeToDecorationMap.set("entity.name.function.cpp", this.makeDecorationType("#8000FF", false, false, false));
+    this.scopeToDecorationMap.set("entity.name.function.method.cpp", this.makeDecorationType("#008000", false, false, false));
+    this.scopeToDecorationMap.set("entity.name.function.method.static.cpp", this.makeDecorationType("#008000", true, false, false));
+    this.scopeToDecorationMap.set("variable.other.cpp", this.makeDecorationType("#8080FF", false, false, false));
+    this.scopeToDecorationMap.set("variable.other.local.cpp", this.makeDecorationType("#800000", false, false, false));
+    this.scopeToDecorationMap.set("variable.parameter.cpp", this.makeDecorationType("#804000", false, true, false));
+    this.scopeToDecorationMap.set("variable.other.field.cpp", this.makeDecorationType("#008000", false, false, false));
+    this.scopeToDecorationMap.set("variable.other.field.static.cpp", this.makeDecorationType("#008000", true, false, false));
+    this.scopeToDecorationMap.set("entity.name.type.class.cpp", this.makeDecorationType("#008080", false, false, true));
+    this.scopeToDecorationMap.set("entity.name.type.enum.cpp", this.makeDecorationType("#000080", false, false, true));
+    this.scopeToDecorationMap.set("variable.other.enummember.cpp", this.makeDecorationType("#0000C0", false, false, true));
+    this.scopeToDecorationMap.set("entity.name.type.typedef.cpp", this.makeDecorationType("#800000", false, false, true));
+    this.scopeToDecorationMap.set("entity.name.type.dependent.cpp", this.makeDecorationType("#008080", false, true, true));
+    this.scopeToDecorationMap.set("entity.name.other.dependent.cpp", this.makeDecorationType("#8000FF", false, true, false));
+    this.scopeToDecorationMap.set("entity.name.namespace.cpp", this.makeDecorationType("#800000", false, false, true));
+    this.scopeToDecorationMap.set("entity.name.type.template.cpp", this.makeDecorationType("#FF8000", false, false, true));
+    this.scopeToDecorationMap.set("entity.name.type.concept.cpp", this.makeDecorationType("#B030B0", false, false, true));
+    this.scopeToDecorationMap.set("storage.type.primitive.cpp", this.makeDecorationType("#000000", false, false, true));
+    this.scopeToDecorationMap.set("entity.name.function.preprocessor.cpp", this.makeDecorationType("#008000", false, false, false));
+
+    // My extensions.
+    this.scopeToDecorationMap.set("entity.name.function.declaration.cpp", this.makeDecorationType("#4E0077", false, false, true));
+    this.scopeToDecorationMap.set("entity.name.function.method.declaration.cpp", this.makeDecorationType("#008000", false, false, true));
+    this.scopeToDecorationMap.set("entity.name.function.method.static.declaration.cpp", this.makeDecorationType("#008000", true, false, true));
   }
   public dispose() {
     this.files.clear();
@@ -180,17 +223,13 @@ export class Highlighter {
   // theme is loaded.
   public initialize(themeRuleMatcher: ThemeRuleMatcher) {
     this.decorationTypes.forEach((t) => t.dispose());
+    this.setupDecorationMap();
     this.decorationTypes = this.scopeLookupTable.map((scopes) => {
-      const options: vscode.DecorationRenderOptions = {
-        // If there exists no rule for this scope the matcher returns an empty
-        // color. That's ok because vscode does not do anything when applying
-        // empty decorations.
-        color : themeRuleMatcher.getBestThemeRule(scopes[0]).foreground,
-        // If the rangeBehavior is set to Open in any direction the
-        // highlighting becomes weird in certain cases.
-        rangeBehavior : vscode.DecorationRangeBehavior.ClosedClosed,
-      };
-      return vscode.window.createTextEditorDecorationType(options);
+      const result = this.scopeToDecorationMap.get(scopes[0]);
+      if (!result) {
+        console.log("WARNING: No decoration found for scope " + scopes[0]);
+      }
+      return result;
     });
     this.getVisibleTextEditorUris().forEach((fileUri) =>
                                                 this.applyHighlights(fileUri));
