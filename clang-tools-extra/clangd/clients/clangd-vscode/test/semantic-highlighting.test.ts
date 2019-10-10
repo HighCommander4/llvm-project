@@ -116,7 +116,8 @@ suite('SemanticHighlighting Tests', () => {
         tokens : [
           {character : 1, length : 2, scopeIndex : 1},
           {character : 10, length : 2, scopeIndex : 2},
-        ]
+        ],
+        isInactive: false
       },
       {
         line : 2,
@@ -124,7 +125,8 @@ suite('SemanticHighlighting Tests', () => {
           {character : 3, length : 2, scopeIndex : 1},
           {character : 6, length : 2, scopeIndex : 1},
           {character : 8, length : 2, scopeIndex : 2},
-        ]
+        ],
+        isInactive: false
       },
     ];
 
@@ -139,7 +141,8 @@ suite('SemanticHighlighting Tests', () => {
       line : 1,
       tokens : [
         {character : 2, length : 1, scopeIndex : 0},
-      ]
+      ],
+      isInactive: false
     };
     highlighter.highlight('file2', [ highlightingsInLine1 ]);
     assert.deepEqual(highlighter.applicationUriHistory,

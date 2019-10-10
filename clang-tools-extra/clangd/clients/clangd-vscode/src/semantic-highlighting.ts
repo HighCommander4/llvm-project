@@ -23,6 +23,8 @@ interface SemanticHighlightingInformation {
   // with its start position, length and the "lookup table" index of of the
   // semantic highlighting Text Mate scopes.
   tokens?: string;
+  // Whether the line is part of an inactive preprocessor branch.
+  isInactive?: boolean;
 }
 
 // A SemanticHighlightingToken decoded from the base64 data sent by clangd.
@@ -40,6 +42,8 @@ export interface SemanticHighlightingLine {
   line: number;
   // All SemanticHighlightingTokens on the line.
   tokens: SemanticHighlightingToken[];
+  // Whether the line is part of an inactive preprocessor branch.
+  isInactive: boolean;
 }
 
 // Language server push notification providing the semantic highlighting
@@ -123,7 +127,7 @@ export class SemanticHighlightingFeature implements vscodelc.StaticFeature {
 
   handleNotification(params: SemanticHighlightingParams) {
     const lines: SemanticHighlightingLine[] = params.lines.map(
-        (line) => ({line : line.line, tokens : decodeTokens(line.tokens)}));
+        (line) => ({line : line.line, tokens : decodeTokens(line.tokens), isInactive: line.isInactive || false}));
     this.highlighter.highlight(params.textDocument.uri, lines);
   }
   // Disposes of all disposable resources used by this object.
@@ -161,6 +165,7 @@ export class Highlighter {
   // SemanticHighlightingToken with scopeIndex i should have the decoration at
   // index i in this list.
   private decorationTypes: vscode.TextEditorDecorationType[] = [];
+  private inactiveCodeDecorationType: vscode.TextEditorDecorationType;
   // The clangd TextMate scope lookup table.
   private scopeLookupTable: string[][];
   constructor(scopeLookupTable: string[][]) {
@@ -192,6 +197,18 @@ export class Highlighter {
       };
       return vscode.window.createTextEditorDecorationType(options);
     });
+    this.inactiveCodeDecorationType = vscode.window.createTextEditorDecorationType({
+      isWholeLine: true,
+      // TODO: Avoid hardcoding these colors.
+      light: {
+        color: "rgb(100, 100, 100)",
+        backgroundColor: "rgba(220, 220, 220, 0.3)"
+      },
+      dark: {
+        color: "rgb(100, 100, 100)",
+        backgroundColor: "rgba(18, 18, 18, 0.3)"
+      }
+    });
     this.getVisibleTextEditorUris().forEach((fileUri) =>
                                                 this.applyHighlights(fileUri));
   }
@@ -222,11 +239,12 @@ export class Highlighter {
     // TextEditorDecorationType are very expensive to create (which makes
     // incremental updates infeasible). For this reason one
     // TextEditorDecorationType is used per scope.
-    const ranges = this.getDecorationRanges(fileUri);
+    const [ranges, inactiveRanges] = this.getDecorationRanges(fileUri);
     vscode.window.visibleTextEditors.forEach((e) => {
       if (e.document.uri.toString() !== fileUri)
         return;
       this.decorationTypes.forEach((d, i) => e.setDecorations(d, ranges[i]));
+      e.setDecorations(this.inactiveCodeDecorationType, inactiveRanges);
     });
   }
 
@@ -245,23 +263,29 @@ export class Highlighter {
 
   // Returns the ranges that should be used when decorating. Index i in the
   // range array has the decoration type at index i of this.decorationTypes.
-  protected getDecorationRanges(fileUri: string): vscode.Range[][] {
+  protected getDecorationRanges(fileUri: string): [vscode.Range[][], vscode.Range[]] {
     if (!this.files.has(fileUri))
       // this.files should always have an entry for fileUri if we are here. But
       // if there isn't one we don't want to crash the extension. This is also
       // useful for tests.
-      return [];
+      return [[], []];
     const lines: SemanticHighlightingLine[] =
         Array.from(this.files.get(fileUri).values());
     const decorations: vscode.Range[][] = this.decorationTypes.map(() => []);
+    const inactiveDecorations: vscode.Range[] = [];
     lines.forEach((line) => {
       line.tokens.forEach((token) => {
         decorations[token.scopeIndex].push(new vscode.Range(
             new vscode.Position(line.line, token.character),
             new vscode.Position(line.line, token.character + token.length)));
       });
+      if (line.isInactive) {
+        inactiveDecorations.push(new vscode.Range(
+            new vscode.Position(line.line, 0),
+            new vscode.Position(line.line, 0)));
+      }
     });
-    return decorations;
+    return [decorations, inactiveDecorations];
   }
 }
 
