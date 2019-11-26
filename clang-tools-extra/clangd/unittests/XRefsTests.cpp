@@ -450,6 +450,17 @@ TEST(LocateSymbol, All) {
           +^+x;
         }
       )cpp",
+
+      R"cpp(// End of identifier (definition)
+        void [[func]]^() {}
+      )cpp",
+
+      R"cpp(// End of identifier (reference)
+        void [[func]]() {}
+        void test() {
+          func^();
+        }
+      )cpp",
   };
   for (const char *Test : Tests) {
     Annotations T(Test);

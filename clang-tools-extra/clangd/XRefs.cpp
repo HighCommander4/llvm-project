@@ -129,16 +129,29 @@ SymbolLocation getPreferredLocation(const Location &ASTLoc,
   return Merged.CanonicalDeclaration;
 }
 
-std::vector<const Decl *> getDeclAtPosition(ParsedAST &AST, SourceLocation Pos,
-                                            DeclRelationSet Relations) {
-  FileID FID;
-  unsigned Offset;
-  std::tie(FID, Offset) = AST.getSourceManager().getDecomposedSpellingLoc(Pos);
+std::vector<const Decl *> getDeclAtOffset(ParsedAST &AST, unsigned Offset,
+                                          DeclRelationSet Relations) {
   SelectionTree Selection(AST.getASTContext(), AST.getTokens(), Offset);
   std::vector<const Decl *> Result;
   if (const SelectionTree::Node *N = Selection.commonAncestor()) {
     auto Decls = targetDecl(N->ASTNode, Relations);
     Result.assign(Decls.begin(), Decls.end());
+  }
+  return Result;
+}
+
+std::vector<const Decl *> getDeclAtPosition(ParsedAST &AST, SourceLocation Pos,
+                                            DeclRelationSet Relations) {
+  FileID FID;
+  unsigned Offset;
+  std::tie(FID, Offset) = AST.getSourceManager().getDecomposedSpellingLoc(Pos);
+  std::vector<const Decl *> Result = getDeclAtOffset(AST, Offset, Relations);
+  // If no declaration was found at this offset, try the previous offset.
+  // This compensates for the fact that SelectionTree interprets an offset
+  // as applying to the character after rather than the character before,
+  // allowing go-to-definition to work at the end of an identifier.
+  if (Result.empty() && Offset > 0) {
+    Result = getDeclAtOffset(AST, Offset - 1, Relations);
   }
   return Result;
 }
