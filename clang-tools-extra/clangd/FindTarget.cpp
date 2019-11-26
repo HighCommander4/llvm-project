@@ -491,6 +491,13 @@ llvm::SmallVector<ReferenceLoc, 2> refInExpr(const Expr *E) {
                                   llvm::SmallVector<const NamedDecl *, 1>(
                                       E->decls().begin(), E->decls().end())});
     }
+
+    void VisitSizeOfPackExpr(const SizeOfPackExpr *E) {
+      Refs.push_back(ReferenceLoc{NestedNameSpecifierLoc(),
+                                  E->getPackLoc(),
+                                  /*IsDecl=*/false,
+                                  {E->getPack()}});
+    }
   };
 
   Visitor V;
