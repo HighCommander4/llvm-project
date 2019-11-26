@@ -250,16 +250,44 @@ public:
 
   bool VisitDependentScopeDeclRefExpr(DependentScopeDeclRefExpr *E) {
     H.addToken(E->getNameInfo().getLoc(), HighlightingKind::DependentName);
+    visitDependentTypesInQualifier(E->getQualifierLoc());
     return true;
   }
 
   bool VisitDependentNameTypeLoc(DependentNameTypeLoc L) {
     H.addToken(L.getNameLoc(), HighlightingKind::DependentType);
+    visitDependentTypesInQualifier(L.getQualifierLoc());
+    return true;
+  }
+
+  // This is similar to DependentNameTypeLoc, but used for
+  // template-ids where the template-name itself is dependent.
+  bool VisitDependentTemplateSpecializationTypeLoc(
+      DependentTemplateSpecializationTypeLoc L) {
+    H.addToken(L.getTemplateNameLoc(), HighlightingKind::DependentType);
+    visitDependentTypesInQualifier(L.getQualifierLoc());
     return true;
   }
 
 private:
   HighlightingsBuilder &H;
+
+  // findExplicitReferences will walk nested-name-specifiers and
+  // find anything that can be resolved to a Decl. However, non-leaf
+  // components of nested-name-specifiers which are dependent names
+  // (kind "Identifier") cannot be resolved to a decl and also do
+  // not have a Visit() method called on them directly, so we
+  // walk the nested-name-specifiers of relevant node types
+  // (e.g. DependentScopeDeclRefExpr) here to catch them.
+  void visitDependentTypesInQualifier(NestedNameSpecifierLoc Q) {
+    NestedNameSpecifier *NNS = Q.getNestedNameSpecifier();
+    if (!NNS)
+      return;
+    if (NNS->getKind() == NestedNameSpecifier::Identifier) {
+      H.addToken(Q.getLocalBeginLoc(), HighlightingKind::DependentType);
+    }
+    visitDependentTypesInQualifier(Q.getPrefix());
+  }
 };
 
 // Encode binary data into base64.
