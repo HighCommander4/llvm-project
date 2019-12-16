@@ -27,6 +27,7 @@
 #include "clang/AST/TypeLoc.h"
 #include "clang/AST/TypeLocVisitor.h"
 #include "clang/Basic/LangOptions.h"
+#include "clang/Basic/OperatorKinds.h"
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -84,6 +85,58 @@ getMembersReferencedViaDependentName(const Type *T, const DeclarationName &Name,
     return IsNonstaticMember ? D->isCXXInstanceMember()
                              : !D->isCXXInstanceMember();
   });
+}
+
+ASTContext *hackyFindASTContext(const Type *T) {
+  auto *TST = T->getAs<TemplateSpecializationType>();
+  if (!TST)
+    return nullptr;
+  const ClassTemplateDecl *TD = dyn_cast_or_null<ClassTemplateDecl>(
+      TST->getTemplateName().getAsTemplateDecl());
+  if (!TD)
+    return nullptr;
+  return &TD->getASTContext();
+}
+
+// Given the type T of a dependent expression that appears of the LHS of a "->",
+// heuristically find a corresponding pointee type in whose scope we could look
+// up the name appearing on the RHS.
+const Type *getPointeeType(const Type *T) {
+  if (!T)
+    return nullptr;
+
+  if (T->isPointerType()) {
+    return T->getAs<PointerType>()->getPointeeType().getTypePtrOrNull();
+  }
+
+  // Try to handle smart pointer types.
+
+  // Look up operator-> in the primary template. If we find one, it's probably a
+  // smart pointer type.
+  ASTContext *Ctx = hackyFindASTContext(T);
+  if (!Ctx)
+    return nullptr;
+  auto ArrowOps = getMembersReferencedViaDependentName(
+      T, Ctx->DeclarationNames.getCXXOperatorName(OO_Arrow),
+      /*IsNonStaticMember=*/true);
+  if (ArrowOps.empty())
+    return nullptr;
+
+  // Getting the return type of the found operator-> method decl isn't useful,
+  // because we discarded template arguments to perform lookup in the primary
+  // template scope, so the return type would just have the form U* where U is a
+  // template parameter type.
+  // Instead, just handle the common case where the smart pointer type has the
+  // form of SmartPtr<X, ...>, and assume X is the pointee type.
+  auto *TST = T->getAs<TemplateSpecializationType>();
+  if (!TST)
+    return nullptr;
+  if (TST->getNumArgs() == 0)
+    return nullptr;
+  const TemplateArgument &FirstArg = TST->getArg(0);
+  if (FirstArg.getKind() != TemplateArgument::Type)
+    return nullptr;
+  return FirstArg.getAsType().getTypePtrOrNull();
 }
 
 // TargetFinder locates the entities that an AST node refers to.
@@ -250,14 +303,7 @@ public:
       VisitCXXDependentScopeMemberExpr(const CXXDependentScopeMemberExpr *E) {
         const Type *BaseType = E->getBaseType().getTypePtrOrNull();
         if (E->isArrow()) {
-          // FIXME: Handle smart pointer types by looking up operator->
-          // in the primary template.
-          if (!BaseType || !BaseType->isPointerType()) {
-            return;
-          }
-          BaseType = BaseType->getAs<PointerType>()
-                         ->getPointeeType()
-                         .getTypePtrOrNull();
+          BaseType = getPointeeType(BaseType);
         }
         for (const NamedDecl *D :
              getMembersReferencedViaDependentName(BaseType, E->getMember(),

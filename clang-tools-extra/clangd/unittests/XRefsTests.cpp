@@ -502,7 +502,7 @@ TEST(LocateSymbol, All) {
 
       R"cpp(// FIXME: Heuristic resolution of dependent method
             // invoked via smart pointer
-        template <typename> struct S { void foo(); };
+        template <typename> struct S { void [[foo]]() {} };
         template <typename T> struct unique_ptr {
           T* operator->();
         };
