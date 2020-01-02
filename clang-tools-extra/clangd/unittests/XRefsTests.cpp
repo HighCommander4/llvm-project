@@ -495,6 +495,16 @@ TEST(LocateSymbol, All) {
         void test(unique_ptr<S<T>>& V) {
           V->fo^o();
         }
+      )cpp",
+
+      R"cpp(// Class template argument deduction
+        template <typename T>
+        struct [[Test]] {
+          Test(T);
+        };
+        void foo() {
+          T^est a(5);
+        }
       )cpp"};
   for (const char *Test : Tests) {
     Annotations T(Test);
@@ -513,6 +523,7 @@ TEST(LocateSymbol, All) {
     // FIXME: Auto-completion in a template requires disabling delayed template
     // parsing.
     TU.ExtraArgs.push_back("-fno-delayed-template-parsing");
+    TU.ExtraArgs.push_back("-std=c++17");
 
     auto AST = TU.build();
     ASSERT_TRUE(AST.getDiagnostics().empty())
