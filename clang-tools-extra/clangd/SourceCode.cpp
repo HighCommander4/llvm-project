@@ -272,6 +272,42 @@ TokenFlavor getTokenFlavor(SourceLocation Loc, const SourceManager &SM,
   return Other;
 }
 
+SourceLocation getRawWordBegin(SourceLocation Loc, const SourceManager &SM,
+                               const LangOptions &LangOpts) {
+  llvm::StringRef Buf = SM.getBufferData(SM.getMainFileID());
+  FileID FID;
+  unsigned Offset;
+  std::tie(FID, Offset) = SM.getDecomposedLoc(Loc);
+  unsigned Start = Offset;
+  while (Start > 0 && Lexer::isIdentifierBodyChar(Buf[Start - 1], LangOpts)) {
+    --Start;
+  }
+  return SM.getComposedLoc(FID, Start);
+}
+
+SourceLocation getRawWordEnd(SourceLocation Loc, const SourceManager &SM,
+                             const LangOptions &LangOpts) {
+  llvm::StringRef Buf = SM.getBufferData(SM.getMainFileID());
+  FileID FID;
+  unsigned Offset;
+  std::tie(FID, Offset) = SM.getDecomposedLoc(Loc);
+  unsigned End = Offset;
+  while (End < Buf.size() && Lexer::isIdentifierBodyChar(Buf[End], LangOpts))
+    ++End;
+  return SM.getComposedLoc(FID, End);
+}
+
+SourceLocation getEndOfIdentifier(SourceLocation Loc, const SourceManager &SM,
+                                  const LangOptions &LangOpts) {
+  if (!Loc.isValid())
+    return SourceLocation{};
+  bool Raw = getTokenFlavor(Loc, SM, LangOpts) == Other;
+  if (Raw) {
+    return getRawWordEnd(Loc, SM, LangOpts);
+  }
+  return Lexer::getLocForEndOfToken(Loc, 0, SM, LangOpts);
+}
+
 } // namespace
 
 SourceLocation getBeginningOfIdentifier(const Position &Pos,
@@ -311,8 +347,9 @@ SourceLocation getBeginningOfIdentifier(const Position &Pos,
     // For interesting token, we return the beginning of the token.
     if (CurrentKind == Identifier || CurrentKind == Operator)
       return CurrentTokBeginning;
-    // otherwise, we return the original loc.
-    return InputLoc;
+    // Otherwise, return the beginning of the raw word at the given position.
+    // This facilitates selecting identifiers in comments and strings.
+    return getRawWordBegin(InputLoc, SM, LangOpts);
   }
 
   // Whitespace is not interesting.
@@ -335,6 +372,13 @@ SourceLocation getBeginningOfIdentifier(const Position &Pos,
 
   // Non-interesting case, we just return the original location.
   return InputLoc;
+}
+
+SourceRange getWordAtPosition(const Position &Pos, const SourceManager &SM,
+                              const LangOptions &LangOpts) {
+  SourceLocation Begin = getBeginningOfIdentifier(Pos, SM, LangOpts);
+  SourceLocation End = getEndOfIdentifier(Begin, SM, LangOpts);
+  return {Begin, End};
 }
 
 bool isValidFileRange(const SourceManager &Mgr, SourceRange R) {
@@ -793,97 +837,99 @@ void parseNamespaceEvents(llvm::StringRef Code,
 
   NamespaceEvent Event;
   lex(Code, format::getFormattingLangOpts(Style),
-      [&](const clang::Token &Tok,const SourceManager &SM) {
-    Event.Pos = sourceLocToPosition(SM, Tok.getLocation());
-    switch (Tok.getKind()) {
-    case tok::raw_identifier:
-      // In raw mode, this could be a keyword or a name.
-      switch (State) {
-      case UsingNamespace:
-      case UsingNamespaceName:
-        NSName.append(std::string(Tok.getRawIdentifier()));
-        State = UsingNamespaceName;
-        break;
-      case Namespace:
-      case NamespaceName:
-        NSName.append(std::string(Tok.getRawIdentifier()));
-        State = NamespaceName;
-        break;
-      case Using:
-        State =
-            (Tok.getRawIdentifier() == "namespace") ? UsingNamespace : Default;
-        break;
-      case Default:
-        NSName.clear();
-        if (Tok.getRawIdentifier() == "namespace")
-          State = Namespace;
-        else if (Tok.getRawIdentifier() == "using")
-          State = Using;
-        break;
-      }
-      break;
-    case tok::coloncolon:
-      // This can come at the beginning or in the middle of a namespace name.
-      switch (State) {
-      case UsingNamespace:
-      case UsingNamespaceName:
-        NSName.append("::");
-        State = UsingNamespaceName;
-        break;
-      case NamespaceName:
-        NSName.append("::");
-        State = NamespaceName;
-        break;
-      case Namespace: // Not legal here.
-      case Using:
-      case Default:
-        State = Default;
-        break;
-      }
-      break;
-    case tok::l_brace:
-      // Record which { started a namespace, so we know when } ends one.
-      if (State == NamespaceName) {
-        // Parsed: namespace <name> {
-        BraceStack.push_back(true);
-        Enclosing.push_back(NSName);
-        Event.Trigger = NamespaceEvent::BeginNamespace;
-        Event.Payload = llvm::join(Enclosing, "::");
-        Callback(Event);
-      } else {
-        // This case includes anonymous namespaces (State = Namespace).
-        // For our purposes, they're not namespaces and we ignore them.
-        BraceStack.push_back(false);
-      }
-      State = Default;
-      break;
-    case tok::r_brace:
-      // If braces are unmatched, we're going to be confused, but don't crash.
-      if (!BraceStack.empty()) {
-        if (BraceStack.back()) {
-          // Parsed: } // namespace
-          Enclosing.pop_back();
-          Event.Trigger = NamespaceEvent::EndNamespace;
-          Event.Payload = llvm::join(Enclosing, "::");
-          Callback(Event);
+      [&](const clang::Token &Tok, const SourceManager &SM) {
+        Event.Pos = sourceLocToPosition(SM, Tok.getLocation());
+        switch (Tok.getKind()) {
+        case tok::raw_identifier:
+          // In raw mode, this could be a keyword or a name.
+          switch (State) {
+          case UsingNamespace:
+          case UsingNamespaceName:
+            NSName.append(std::string(Tok.getRawIdentifier()));
+            State = UsingNamespaceName;
+            break;
+          case Namespace:
+          case NamespaceName:
+            NSName.append(std::string(Tok.getRawIdentifier()));
+            State = NamespaceName;
+            break;
+          case Using:
+            State = (Tok.getRawIdentifier() == "namespace") ? UsingNamespace
+                                                            : Default;
+            break;
+          case Default:
+            NSName.clear();
+            if (Tok.getRawIdentifier() == "namespace")
+              State = Namespace;
+            else if (Tok.getRawIdentifier() == "using")
+              State = Using;
+            break;
+          }
+          break;
+        case tok::coloncolon:
+          // This can come at the beginning or in the middle of a namespace
+          // name.
+          switch (State) {
+          case UsingNamespace:
+          case UsingNamespaceName:
+            NSName.append("::");
+            State = UsingNamespaceName;
+            break;
+          case NamespaceName:
+            NSName.append("::");
+            State = NamespaceName;
+            break;
+          case Namespace: // Not legal here.
+          case Using:
+          case Default:
+            State = Default;
+            break;
+          }
+          break;
+        case tok::l_brace:
+          // Record which { started a namespace, so we know when } ends one.
+          if (State == NamespaceName) {
+            // Parsed: namespace <name> {
+            BraceStack.push_back(true);
+            Enclosing.push_back(NSName);
+            Event.Trigger = NamespaceEvent::BeginNamespace;
+            Event.Payload = llvm::join(Enclosing, "::");
+            Callback(Event);
+          } else {
+            // This case includes anonymous namespaces (State = Namespace).
+            // For our purposes, they're not namespaces and we ignore them.
+            BraceStack.push_back(false);
+          }
+          State = Default;
+          break;
+        case tok::r_brace:
+          // If braces are unmatched, we're going to be confused, but don't
+          // crash.
+          if (!BraceStack.empty()) {
+            if (BraceStack.back()) {
+              // Parsed: } // namespace
+              Enclosing.pop_back();
+              Event.Trigger = NamespaceEvent::EndNamespace;
+              Event.Payload = llvm::join(Enclosing, "::");
+              Callback(Event);
+            }
+            BraceStack.pop_back();
+          }
+          break;
+        case tok::semi:
+          if (State == UsingNamespaceName) {
+            // Parsed: using namespace <name> ;
+            Event.Trigger = NamespaceEvent::UsingDirective;
+            Event.Payload = std::move(NSName);
+            Callback(Event);
+          }
+          State = Default;
+          break;
+        default:
+          State = Default;
+          break;
         }
-        BraceStack.pop_back();
-      }
-      break;
-    case tok::semi:
-      if (State == UsingNamespaceName) {
-        // Parsed: using namespace <name> ;
-        Event.Trigger = NamespaceEvent::UsingDirective;
-        Event.Payload = std::move(NSName);
-        Callback(Event);
-      }
-      State = Default;
-      break;
-    default:
-      State = Default;
-      break;
-    }
-  });
+      });
 }
 
 // Returns the prefix namespaces of NS: {"" ... NS}.
@@ -901,7 +947,8 @@ llvm::SmallVector<llvm::StringRef, 8> ancestorNamespaces(llvm::StringRef NS) {
 std::vector<std::string> visibleNamespaces(llvm::StringRef Code,
                                            const format::FormatStyle &Style) {
   std::string Current;
-  // Map from namespace to (resolved) namespaces introduced via using directive.
+  // Map from namespace to (resolved) namespaces introduced via using
+  // directive.
   llvm::StringMap<llvm::StringSet<>> UsingDirectives;
 
   parseNamespaceEvents(Code, Style, [&](NamespaceEvent Event) {
@@ -949,7 +996,8 @@ std::vector<std::string> visibleNamespaces(llvm::StringRef Code,
 llvm::StringSet<> collectWords(llvm::StringRef Content) {
   // We assume short words are not significant.
   // We may want to consider other stopwords, e.g. language keywords.
-  // (A very naive implementation showed no benefit, but lexing might do better)
+  // (A very naive implementation showed no benefit, but lexing might do
+  // better)
   static constexpr int MinWordLength = 4;
 
   std::vector<CharRole> Roles(Content.size());
@@ -1019,16 +1067,16 @@ std::vector<TextEdit> Edit::asTextEdits() const {
 }
 
 bool Edit::canApplyTo(llvm::StringRef Code) const {
-  // Create line iterators, since line numbers are important while applying our
-  // edit we cannot skip blank lines.
+  // Create line iterators, since line numbers are important while applying
+  // our edit we cannot skip blank lines.
   auto LHS = llvm::MemoryBuffer::getMemBuffer(Code);
   llvm::line_iterator LHSIt(*LHS, /*SkipBlanks=*/false);
 
   auto RHS = llvm::MemoryBuffer::getMemBuffer(InitialCode);
   llvm::line_iterator RHSIt(*RHS, /*SkipBlanks=*/false);
 
-  // Compare the InitialCode we prepared the edit for with the Code we received
-  // line by line to make sure there are no differences.
+  // Compare the InitialCode we prepared the edit for with the Code we
+  // received line by line to make sure there are no differences.
   // FIXME: This check is too conservative now, it should be enough to only
   // check lines around the replacements contained inside the Edit.
   while (!LHSIt.is_at_eof() && !RHSIt.is_at_eof()) {
@@ -1038,9 +1086,9 @@ bool Edit::canApplyTo(llvm::StringRef Code) const {
     ++RHSIt;
   }
 
-  // After we reach EOF for any of the files we make sure the other one doesn't
-  // contain any additional content except empty lines, they should not
-  // interfere with the edit we produced.
+  // After we reach EOF for any of the files we make sure the other one
+  // doesn't contain any additional content except empty lines, they should
+  // not interfere with the edit we produced.
   while (!LHSIt.is_at_eof()) {
     if (!LHSIt->empty())
       return false;
@@ -1069,8 +1117,8 @@ EligibleRegion getEligiblePoints(llvm::StringRef Code,
   // Start with global namespace.
   std::vector<std::string> Enclosing = {""};
   // FIXME: In addition to namespaces try to generate events for function
-  // definitions as well. One might use a closing parantheses(")" followed by an
-  // opening brace "{" to trigger the start.
+  // definitions as well. One might use a closing parantheses(")" followed by
+  // an opening brace "{" to trigger the start.
   parseNamespaceEvents(Code, Style, [&](NamespaceEvent Event) {
     // Using Directives only introduces declarations to current scope, they do
     // not change the current namespace, so skip them.
@@ -1084,8 +1132,8 @@ EligibleRegion getEligiblePoints(llvm::StringRef Code,
     if (Event.Trigger == NamespaceEvent::BeginNamespace) {
       Enclosing.emplace_back(std::move(Event.Payload));
       CurrentNamespace = Enclosing.back();
-      // parseNameSpaceEvents reports the beginning position of a token; we want
-      // to insert after '{', so increment by one.
+      // parseNameSpaceEvents reports the beginning position of a token; we
+      // want to insert after '{', so increment by one.
       ++Event.Pos.character;
     } else {
       // Event.Payload points to outer namespace when exiting a scope, so use

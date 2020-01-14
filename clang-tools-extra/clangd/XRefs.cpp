@@ -10,9 +10,11 @@
 #include "CodeCompletionStrings.h"
 #include "FindSymbols.h"
 #include "FindTarget.h"
+#include "FuzzyMatch.h"
 #include "Logger.h"
 #include "ParsedAST.h"
 #include "Protocol.h"
+#include "Quality.h"
 #include "Selection.h"
 #include "SourceCode.h"
 #include "URI.h"
@@ -44,6 +46,7 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cctype>
 
 namespace clang {
 namespace clangd {
@@ -190,6 +193,116 @@ std::vector<DocumentLink> getDocumentLinks(ParsedAST &AST) {
   return Result;
 }
 
+bool isLikelyToBeIdentifier(StringRef Word) {
+  // Word contains underscore
+  if (Word.contains('_')) {
+    return true;
+  }
+  // Word contains capital letter other than at beginning
+  if (Word.substr(1).find_if([](char C) { return std::isupper(C); }) !=
+      StringRef::npos) {
+    return true;
+  }
+  // FIXME: There are other signals we could listen for.
+  // Some of these require inspecting the surroundings of the word as well.
+  //   - mid-sentence Capitalization
+  //   - markup like quotes / backticks / brackets / "\p"
+  //   - word is used as an identifier in nearby token (very close if very
+  //     short, anywhere in file if longer)
+  //   - word has a qualifier (foo::bar)
+  return false;
+}
+
+using ScoredLocatedSymbol = std::pair<float, LocatedSymbol>;
+struct ScoredSymbolGreater {
+  bool operator()(const ScoredLocatedSymbol &L, const ScoredLocatedSymbol &R) {
+    if (L.first != R.first)
+      return L.first > R.first;
+    return L.second.Name < R.second.Name; // Earlier name is better.
+  }
+};
+
+std::vector<LocatedSymbol> navigationFallback(ParsedAST &AST,
+                                              const SymbolIndex *Index,
+                                              Position Pos,
+                                              const std::string &MainFilePath) {
+  const auto &SM = AST.getSourceManager();
+  auto SourceRange = getWordAtPosition(Pos, SM, AST.getLangOpts());
+  auto QueryString = toSourceCode(SM, SourceRange);
+  if (!isLikelyToBeIdentifier(QueryString)) {
+    return {};
+  }
+
+  FuzzyFindRequest Req;
+  Req.Query = QueryString.str();
+  Req.ProximityPaths = {MainFilePath};
+  // FIXME: Set Req.Scopes to the lexically enclosing scopes.
+  // For extra strictness, consider AnyScope=false.
+  Req.AnyScope = true;
+  // Choose a limit that's large enough that it contains the user's desired
+  // target even in the presence of some false positives, but small enough that
+  // it doesn't generate too much noise.
+  Req.Limit = 5;
+  TopN<ScoredLocatedSymbol, ScoredSymbolGreater> Top(*Req.Limit);
+  FuzzyMatcher Filter(Req.Query);
+  auto MainFileURI = URIForFile::canonicalize(MainFilePath, MainFilePath);
+  bool HaveResultInMainFile = false;
+  Index->fuzzyFind(Req, [&](const Symbol &Sym) {
+    auto Loc = symbolToLocation(Sym, MainFilePath);
+    if (!Loc) {
+      log("Navigation fallback: {0}", Loc.takeError());
+      return;
+    }
+
+    // For now, only consider exact name matches, including case.
+    // This is to avoid too many false positives.
+    // We could relax this in the future if we make the query more accurate
+    // by other means.
+    if (Sym.Name != QueryString)
+      return;
+
+    if (Loc->uri == MainFileURI)
+      HaveResultInMainFile = true;
+
+    std::string Scope = std::string(Sym.Scope);
+    llvm::StringRef ScopeRef = Scope;
+    ScopeRef.consume_back("::");
+    LocatedSymbol Located;
+    Located.Name = (Sym.Name + Sym.TemplateSpecializationArgs).str();
+    Located.PreferredDeclaration = *Loc;
+    // FIXME: Populate Definition?
+
+    SymbolQualitySignals Quality;
+    Quality.merge(Sym);
+    SymbolRelevanceSignals Relevance;
+    Relevance.Name = Sym.Name;
+    Relevance.Query = SymbolRelevanceSignals::Generic;
+    if (auto NameMatch = Filter.match(Sym.Name))
+      Relevance.NameMatch = *NameMatch;
+    else {
+      log("Navigation fallback: {0} didn't match query {1}", Sym.Name,
+          Filter.pattern());
+      return;
+    }
+    Relevance.merge(Sym);
+    auto Score =
+        evaluateSymbolAndRelevance(Quality.evaluate(), Relevance.evaluate());
+    dlog("Navigation fallback: {0}{1} = {2}\n{3}{4}\n", Sym.Scope, Sym.Name,
+         Score, Quality, Relevance);
+
+    Top.push({Score, std::move(Located)});
+  });
+  std::vector<LocatedSymbol> Result;
+  for (auto &Res : std::move(Top).items())
+    Result.push_back(std::move(Res.second));
+  // If we have more than 3 results, and none from the current file, don't
+  // return anything, as confidence is too low.
+  // FIXME: Alternatively, try a stricter query?
+  if (Result.size() > 3 && !HaveResultInMainFile)
+    return {};
+  return Result;
+}
+
 std::vector<LocatedSymbol> locateSymbolAt(ParsedAST &AST, Position Pos,
                                           const SymbolIndex *Index) {
   const auto &SM = AST.getSourceManager();
@@ -279,7 +392,7 @@ std::vector<LocatedSymbol> locateSymbolAt(ParsedAST &AST, Position Pos,
   for (const NamedDecl *D : getDeclAtPosition(AST, SourceLoc, Relations)) {
     // Special case: void foo() ^override: jump to the overridden method.
     if (const auto *CMD = llvm::dyn_cast<CXXMethodDecl>(D)) {
-      const InheritableAttr* Attr = D->getAttr<OverrideAttr>();
+      const InheritableAttr *Attr = D->getAttr<OverrideAttr>();
       if (!Attr)
         Attr = D->getAttr<FinalAttr>();
       const syntax::Token *Tok =
@@ -338,6 +451,10 @@ std::vector<LocatedSymbol> locateSymbolAt(ParsedAST &AST, Position Pos,
           R.PreferredDeclaration = *Loc;
       }
     });
+  }
+
+  if (Result.empty()) {
+    return navigationFallback(AST, Index, Pos, *MainFilePath);
   }
 
   return Result;
@@ -756,7 +873,6 @@ const CXXRecordDecl *findRecordTypeAt(ParsedAST &AST, Position Pos) {
                               return Result != nullptr;
                             });
   return Result;
-
 }
 
 std::vector<const CXXRecordDecl *> typeParents(const CXXRecordDecl *CXXRD) {

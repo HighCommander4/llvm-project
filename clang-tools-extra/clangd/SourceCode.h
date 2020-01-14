@@ -68,7 +68,7 @@ Position offsetToPosition(llvm::StringRef Code, size_t Offset);
 /// FIXME: This should return an error if the location is invalid.
 Position sourceLocToPosition(const SourceManager &SM, SourceLocation Loc);
 
-/// Returns the taken range at \p TokLoc.
+/// Returns the token range at \p TokLoc.
 llvm::Optional<Range> getTokenRange(const SourceManager &SM,
                                     const LangOptions &LangOpts,
                                     SourceLocation TokLoc);
@@ -85,6 +85,13 @@ llvm::Expected<SourceLocation> sourceLocationInMainFile(const SourceManager &SM,
 SourceLocation getBeginningOfIdentifier(const Position &Pos,
                                         const SourceManager &SM,
                                         const LangOptions &LangOpts);
+
+/// Get the source range of the raw word at a specified \p Pos in the main file.
+/// This is similar to the token at the specified position, but for positions
+/// inside comments and strings, it only returns a single word rather than
+/// the entire comment or string token.
+SourceRange getWordAtPosition(const Position &Pos, const SourceManager &SM,
+                              const LangOptions &LangOpts);
 
 /// Returns true iff \p Loc is inside the main file. This function handles
 /// file & macro locations. For macro locations, returns iff the macro is being

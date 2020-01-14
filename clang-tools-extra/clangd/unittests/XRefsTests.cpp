@@ -597,6 +597,52 @@ TEST(LocateSymbol, Warnings) {
   }
 }
 
+TEST(LocateSymbol, Textual) {
+  const char *Tests[] = {
+      R"cpp(// Comment
+        struct [[MyClass]] {};
+        // Comment mentioning M^yClass
+      )cpp",
+      R"cpp(// String
+        struct [[MyClass]] {};
+        const char* s = "String literal mentioning M^yClass";
+      )cpp",
+      R"cpp(// Invalid code
+        /*error-ok*/
+        int [[myFunction]](int);
+        int var = m^yFunction();
+      )cpp",
+      R"cpp(// Dependent type
+        struct Foo {
+          void [[uniqueMethodName]]();
+        };
+        template <typename T>
+        void f(T t) {
+          t->u^niqueMethodName();
+        }
+      )cpp"};
+
+  for (const char *Test : Tests) {
+    Annotations T(Test);
+    llvm::Optional<Range> WantDecl;
+    if (!T.ranges().empty())
+      WantDecl = T.range();
+
+    auto TU = TestTU::withCode(T.code());
+
+    auto AST = TU.build();
+    auto Index = TU.index();
+    auto Results = locateSymbolAt(AST, T.point(), Index.get());
+
+    if (!WantDecl) {
+      EXPECT_THAT(Results, IsEmpty()) << Test;
+    } else {
+      ASSERT_THAT(Results, ::testing::SizeIs(1)) << Test;
+      EXPECT_EQ(Results[0].PreferredDeclaration.range, *WantDecl) << Test;
+    }
+  }
+}
+
 TEST(LocateSymbol, Ambiguous) {
   auto T = Annotations(R"cpp(
     struct Foo {
@@ -669,6 +715,27 @@ TEST(LocateSymbol, Ambiguous) {
   EXPECT_THAT(locateSymbolAt(AST, T.point("13")),
               UnorderedElementsAre(Sym("baz", T.range("StaticOverload1")),
                                    Sym("baz", T.range("StaticOverload2"))));
+}
+
+TEST(LocateSymbol, TextualAmbiguous) {
+  auto T = Annotations(R"cpp(
+        struct Foo {
+          void $FooLoc[[uniqueMethodName]]();
+        };
+        struct Bar {
+          void $BarLoc[[uniqueMethodName]]();
+        };
+        template <typename T>
+        void f(T t) {
+          t->u^niqueMethodName();
+        }
+      )cpp");
+  auto TU = TestTU::withCode(T.code());
+  auto AST = TU.build();
+  auto Index = TU.index();
+  EXPECT_THAT(locateSymbolAt(AST, T.point(), Index.get()),
+              UnorderedElementsAre(Sym("uniqueMethodName", T.range("FooLoc")),
+                                   Sym("uniqueMethodName", T.range("BarLoc"))));
 }
 
 TEST(LocateSymbol, TemplateTypedefs) {
