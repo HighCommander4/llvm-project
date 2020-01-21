@@ -23,6 +23,7 @@
 #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANGD_PROTOCOL_H
 #define LLVM_CLANG_TOOLS_EXTRA_CLANGD_PROTOCOL_H
 
+#include "Path.h"
 #include "URI.h"
 #include "index/SymbolID.h"
 #include "clang/Index/IndexSymbol.h"
@@ -449,6 +450,14 @@ struct ConfigurationSettings {
 };
 bool fromJSON(const llvm::json::Value &, ConfigurationSettings &);
 
+struct CompilationDatabasePath {
+  Path sourceDir;
+  Path dbPath;
+};
+bool fromJSON(const llvm::json::Value &, CompilationDatabasePath &);
+
+using CompilationDatabaseMap = std::vector<CompilationDatabasePath>;
+
 /// Clangd extension: parameters configurable at `initialize` time.
 /// LSP defines this type as `any`.
 struct InitializationOptions {
@@ -456,7 +465,12 @@ struct InitializationOptions {
   // also set through the initialize request (initializationOptions field).
   ConfigurationSettings ConfigSettings;
 
-  llvm::Optional<std::string> compilationDatabasePath;
+  llvm::Optional<Path> compilationDatabasePath;
+
+  // A map from source directories to directories containing compilation
+  // database files. Paths must be absolute.
+  llvm::Optional<CompilationDatabaseMap> compilationDatabaseMap;
+
   // Additional flags to be included in the "fallback command" used when
   // the compilation database doesn't describe an opened file.
   // The command used will be approximately `clang $FILE $fallbackFlags`.

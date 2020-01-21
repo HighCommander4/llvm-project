@@ -480,7 +480,8 @@ void ClangdLSPServer::onInitialize(const InitializeParams &Params,
     CompileCommandsDir = Dir;
   if (UseDirBasedCDB) {
     BaseCDB = std::make_unique<DirectoryBasedGlobalCompilationDatabase>(
-        CompileCommandsDir);
+        CompileCommandsDir,
+        Params.initializationOptions.compilationDatabaseMap);
     BaseCDB = getQueryDriverDatabase(
         llvm::makeArrayRef(ClangdServerOpts.QueryDriverGlobs),
         std::move(BaseCDB));
@@ -1270,7 +1271,8 @@ ClangdLSPServer::ClangdLSPServer(
   // clang-format on
 }
 
-ClangdLSPServer::~ClangdLSPServer() { IsBeingDestroyed = true;
+ClangdLSPServer::~ClangdLSPServer() {
+  IsBeingDestroyed = true;
   // Explicitly destroy ClangdServer first, blocking on threads it owns.
   // This ensures they don't access any other members.
   Server.reset();

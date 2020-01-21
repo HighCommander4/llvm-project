@@ -60,8 +60,10 @@ GlobalCompilationDatabase::getFallbackCommand(PathRef File) const {
 
 DirectoryBasedGlobalCompilationDatabase::
     DirectoryBasedGlobalCompilationDatabase(
-        llvm::Optional<Path> CompileCommandsDir)
-    : CompileCommandsDir(std::move(CompileCommandsDir)) {}
+        llvm::Optional<Path> CompileCommandsDir,
+        llvm::Optional<CompilationDatabaseMap> CDBMap)
+    : CompileCommandsDir(std::move(CompileCommandsDir)),
+      CDBMap(std::move(CDBMap)) {}
 
 DirectoryBasedGlobalCompilationDatabase::
     ~DirectoryBasedGlobalCompilationDatabase() = default;
@@ -136,6 +138,13 @@ DirectoryBasedGlobalCompilationDatabase::lookupCDB(
     CachedCDB *Entry = nullptr;
     if (CompileCommandsDir) {
       Entry = &getCDBInDirLocked(*CompileCommandsDir);
+    } else if (CDBMap) {
+      for (const auto &MapEntry : *CDBMap) {
+        if (StringRef(Request.FileName).startswith(MapEntry.sourceDir)) {
+          Entry = &getCDBInDirLocked(MapEntry.dbPath);
+          break;
+        }
+      }
     } else {
       // Traverse the canonical version to prevent false positives. i.e.:
       // src/build/../a.cc can detect a CDB in /src/build if not canonicalized.

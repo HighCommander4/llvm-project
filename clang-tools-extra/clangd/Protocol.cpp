@@ -940,6 +940,16 @@ bool fromJSON(const llvm::json::Value &Params, ConfigurationSettings &S) {
   return true;
 }
 
+bool fromJSON(const llvm::json::Value &Params, CompilationDatabasePath &P) {
+  llvm::json::ObjectMapper O(Params);
+  if (!O)
+    return true; // 'any' type in LSP.
+
+  O.map("sourceDir", P.sourceDir);
+  O.map("dbPath", P.dbPath);
+  return true;
+}
+
 bool fromJSON(const llvm::json::Value &Params, InitializationOptions &Opts) {
   llvm::json::ObjectMapper O(Params);
   if (!O)
@@ -947,6 +957,7 @@ bool fromJSON(const llvm::json::Value &Params, InitializationOptions &Opts) {
 
   fromJSON(Params, Opts.ConfigSettings);
   O.map("compilationDatabasePath", Opts.compilationDatabasePath);
+  O.map("compilationDatabaseMap", Opts.compilationDatabaseMap);
   O.map("fallbackFlags", Opts.fallbackFlags);
   O.map("clangdFileStatus", Opts.FileStatus);
   return true;

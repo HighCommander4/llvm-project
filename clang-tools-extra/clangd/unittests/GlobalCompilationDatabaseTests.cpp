@@ -39,7 +39,7 @@ using ::testing::StartsWith;
 using ::testing::UnorderedElementsAre;
 
 TEST(GlobalCompilationDatabaseTest, FallbackCommand) {
-  DirectoryBasedGlobalCompilationDatabase DB(None);
+  DirectoryBasedGlobalCompilationDatabase DB(None, None);
   auto Cmd = DB.getFallbackCommand(testPath("foo/bar.cc"));
   EXPECT_EQ(Cmd.Directory, testPath("foo"));
   EXPECT_THAT(Cmd.CommandLine, ElementsAre("clang", testPath("foo/bar.cc")));
@@ -236,7 +236,7 @@ TEST(GlobalCompilationDatabaseTest, DiscoveryWithNestedCDBs) {
   // Note that gen2.cc goes missing with our following model, not sure this
   // happens in practice though.
   {
-    DirectoryBasedGlobalCompilationDatabase DB(llvm::None);
+    DirectoryBasedGlobalCompilationDatabase DB(llvm::None, llvm::None);
     std::vector<std::string> DiscoveredFiles;
     auto Sub =
         DB.watch([&DiscoveredFiles](const std::vector<std::string> Changes) {
@@ -258,7 +258,7 @@ TEST(GlobalCompilationDatabaseTest, DiscoveryWithNestedCDBs) {
 
   // With a custom compile commands dir.
   {
-    DirectoryBasedGlobalCompilationDatabase DB(FS.Root.str().str());
+    DirectoryBasedGlobalCompilationDatabase DB(FS.Root.str().str(), llvm::None);
     std::vector<std::string> DiscoveredFiles;
     auto Sub =
         DB.watch([&DiscoveredFiles](const std::vector<std::string> Changes) {
