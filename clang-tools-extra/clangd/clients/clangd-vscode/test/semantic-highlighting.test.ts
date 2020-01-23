@@ -63,7 +63,8 @@ suite('SemanticHighlighting Tests', () => {
   test('Colorizer groups decorations correctly', async () => {
     const scopeTable = [
       [ 'variable' ], [ 'entity.type.function' ],
-      [ 'entity.type.function.method' ]
+      [ 'entity.type.function.method' ],
+      [ 'clangd.preprocessor.inactive' ]
     ];
     // Create the scope source ranges the highlightings should be highlighted
     // at. Assumes the scopes used are the ones in the "scopeTable" variable.
@@ -80,6 +81,12 @@ suite('SemanticHighlighting Tests', () => {
                   new vscode.Position(line.line,
                                       token.character + token.length)));
             });
+            if (line.isInactive) {
+              scopeRanges[scopeRanges.length - 1].push(new vscode.Range(
+                new vscode.Position(line.line, 0),
+                new vscode.Position(line.line, 0)
+              ));
+            }
           });
           return scopeRanges;
         };
@@ -121,7 +128,8 @@ suite('SemanticHighlighting Tests', () => {
         tokens : [
           {character : 1, length : 2, scopeIndex : 1},
           {character : 10, length : 2, scopeIndex : 2},
-        ]
+        ],
+        isInactive: false
       },
       {
         line : 2,
@@ -129,7 +137,8 @@ suite('SemanticHighlighting Tests', () => {
           {character : 3, length : 2, scopeIndex : 1},
           {character : 6, length : 2, scopeIndex : 1},
           {character : 8, length : 2, scopeIndex : 2},
-        ]
+        ],
+        isInactive: true
       },
     ];
 
@@ -144,7 +153,8 @@ suite('SemanticHighlighting Tests', () => {
       line : 1,
       tokens : [
         {character : 2, length : 1, scopeIndex : 0},
-      ]
+      ],
+      isInactive: false
     };
     highlighter.highlight(fileUri2, [ highlightingsInLine1 ]);
     assert.deepEqual(

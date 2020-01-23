@@ -545,7 +545,7 @@ llvm::StringRef toTextMateScope(HighlightingKind Kind) {
   case HighlightingKind::Macro:
     return "entity.name.function.preprocessor.cpp";
   case HighlightingKind::InactiveCode:
-    return "meta.disabled";
+    return "clangd.preprocessor.inactive";
   }
   llvm_unreachable("unhandled HighlightingKind");
 }
