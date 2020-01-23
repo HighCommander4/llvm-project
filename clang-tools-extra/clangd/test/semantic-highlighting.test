@@ -62,7 +62,7 @@
 # CHECK-NEXT:            "entity.name.function.preprocessor.cpp"
 # CHECK-NEXT:          ],
 # CHECK-NEXT:          [
-# CHECK-NEXT:            "meta.disabled"
+# CHECK-NEXT:            "clangd.preprocessor.inactive"
 # CHECK-NEXT:          ]
 # CHECK-NEXT:        ]
 # CHECK-NEXT:      },

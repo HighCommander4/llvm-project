@@ -23,6 +23,8 @@ interface SemanticHighlightingInformation {
   // with its start position, length and the "lookup table" index of of the
   // semantic highlighting Text Mate scopes.
   tokens?: string;
+  // Whether the line is part of an inactive preprocessor branch.
+  isInactive?: boolean;
 }
 
 // A SemanticHighlightingToken decoded from the base64 data sent by clangd.
@@ -40,6 +42,8 @@ export interface SemanticHighlightingLine {
   line: number;
   // All SemanticHighlightingTokens on the line.
   tokens: SemanticHighlightingToken[];
+  // Whether the line is part of an inactive preprocessor branch.
+  isInactive: boolean;
 }
 
 // Language server push notification providing the semantic highlighting
@@ -122,7 +126,10 @@ export class SemanticHighlightingFeature implements vscodelc.StaticFeature {
 
   handleNotification(params: SemanticHighlightingParams) {
     const lines: SemanticHighlightingLine[] = params.lines.map(
-        (line) => ({line : line.line, tokens : decodeTokens(line.tokens)}));
+      (line) => ({
+        line: line.line, tokens: decodeTokens(line.tokens),
+        isInactive: line.isInactive || false
+      }));
     this.highlighter.highlight(vscode.Uri.parse(params.textDocument.uri),
                                lines);
   }
@@ -161,6 +168,7 @@ export class Highlighter {
   // SemanticHighlightingToken with scopeIndex i should have the decoration at
   // index i in this list.
   private decorationTypes: vscode.TextEditorDecorationType[] = [];
+  private inactiveDecorationIndex: number;
   // The clangd TextMate scope lookup table.
   private scopeLookupTable: string[][];
   constructor(scopeLookupTable: string[][]) {
@@ -180,7 +188,22 @@ export class Highlighter {
   // theme is loaded.
   public initialize(themeRuleMatcher: ThemeRuleMatcher) {
     this.decorationTypes.forEach((t) => t.dispose());
-    this.decorationTypes = this.scopeLookupTable.map((scopes) => {
+    this.decorationTypes = this.scopeLookupTable.map((scopes, index) => {
+      if (scopes[0] == "clangd.preprocessor.inactive") {
+        this.inactiveDecorationIndex = index;
+        return vscode.window.createTextEditorDecorationType({
+          isWholeLine: true,
+          // FIXME: Avoid hardcoding these colors.
+          light: {
+            color: "rgb(100, 100, 100)",
+            backgroundColor: "rgba(220, 220, 220, 0.3)"
+          },
+          dark: {
+            color: "rgb(100, 100, 100)",
+            backgroundColor: "rgba(18, 18, 18, 0.3)"
+          }
+        });
+      }
       const options: vscode.DecorationRenderOptions = {
         // If there exists no rule for this scope the matcher returns an empty
         // color. That's ok because vscode does not do anything when applying
@@ -262,6 +285,11 @@ export class Highlighter {
             new vscode.Position(line.line, token.character),
             new vscode.Position(line.line, token.character + token.length)));
       });
+      if (line.isInactive) {
+        decorations[this.inactiveDecorationIndex].push(new vscode.Range(
+            new vscode.Position(line.line, 0),
+            new vscode.Position(line.line, 0)));
+      }
     });
     return decorations;
   }
