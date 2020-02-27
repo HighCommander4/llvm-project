@@ -123,7 +123,6 @@ ClangTidyError::ClangTidyError(StringRef CheckName,
     : tooling::Diagnostic(CheckName, DiagLevel, BuildDirectory),
       IsWarningAsError(IsWarningAsError) {}
 
-
 class ClangTidyContext::CachedGlobList {
 public:
   CachedGlobList(StringRef Globs) : Globs(Globs) {}
@@ -296,11 +295,38 @@ static bool IsNOLINTFound(StringRef NolintDirectiveText, StringRef Line,
   return true;
 }
 
+static const char *getCharacterData(const SourceManager &SM, SourceLocation Loc,
+                                    bool *Invalid, bool AvoidIO) {
+  if (!AvoidIO)
+    return SM.getCharacterData(Loc, Invalid);
+
+  // The rest is similar to the implementation of
+  // SourceManager::getCharacterData(), but uses ContentCache::getRawBuffer()
+  // rather than getBuffer() to avoid triggering file I/O if the file contents
+  // aren't already mapped.
+  std::pair<FileID, unsigned> LocInfo = SM.getDecomposedSpellingLoc(Loc);
+  bool CharDataInvalid = false;
+  const SrcMgr::SLocEntry &Entry =
+      SM.getSLocEntry(LocInfo.first, &CharDataInvalid);
+  if (CharDataInvalid || !Entry.isFile()) {
+    *Invalid = true;
+    return "<<<<INVALID BUFFER>>>>";
+  }
+  const llvm::MemoryBuffer *Buffer =
+      Entry.getFile().getContentCache()->getRawBuffer();
+  if (!Buffer) {
+    *Invalid = true;
+    return "<<<<NOT MAPPED>>>>";
+  }
+  return Buffer->getBufferStart() + (CharDataInvalid ? 0 : LocInfo.second);
+}
+
 static bool LineIsMarkedWithNOLINT(const SourceManager &SM, SourceLocation Loc,
                                    unsigned DiagID,
-                                   const ClangTidyContext &Context) {
+                                   const ClangTidyContext &Context,
+                                   bool AvoidIO) {
   bool Invalid;
-  const char *CharacterData = SM.getCharacterData(Loc, &Invalid);
+  const char *CharacterData = getCharacterData(SM, Loc, &Invalid, AvoidIO);
   if (Invalid)
     return false;
 
@@ -313,8 +339,8 @@ static bool LineIsMarkedWithNOLINT(const SourceManager &SM, SourceLocation Loc,
     return true;
 
   // Check if there's a NOLINTNEXTLINE on the previous line.
-  const char *BufBegin =
-      SM.getCharacterData(SM.getLocForStartOfFile(SM.getFileID(Loc)), &Invalid);
+  const char *BufBegin = getCharacterData(
+      SM, SM.getLocForStartOfFile(SM.getFileID(Loc)), &Invalid, AvoidIO);
   if (Invalid || P == BufBegin)
     return false;
 
@@ -344,9 +370,10 @@ static bool LineIsMarkedWithNOLINT(const SourceManager &SM, SourceLocation Loc,
 
 static bool LineIsMarkedWithNOLINTinMacro(const SourceManager &SM,
                                           SourceLocation Loc, unsigned DiagID,
-                                          const ClangTidyContext &Context) {
+                                          const ClangTidyContext &Context,
+                                          bool AvoidIO) {
   while (true) {
-    if (LineIsMarkedWithNOLINT(SM, Loc, DiagID, Context))
+    if (LineIsMarkedWithNOLINT(SM, Loc, DiagID, Context, AvoidIO))
       return true;
     if (!Loc.isMacroID())
       return false;
@@ -360,14 +387,13 @@ namespace tidy {
 
 bool shouldSuppressDiagnostic(DiagnosticsEngine::Level DiagLevel,
                               const Diagnostic &Info, ClangTidyContext &Context,
-                              bool CheckMacroExpansion) {
+                              bool AvoidIO) {
   return Info.getLocation().isValid() &&
          DiagLevel != DiagnosticsEngine::Error &&
          DiagLevel != DiagnosticsEngine::Fatal &&
-         (CheckMacroExpansion ? LineIsMarkedWithNOLINTinMacro
-                              : LineIsMarkedWithNOLINT)(Info.getSourceManager(),
-                                                        Info.getLocation(),
-                                                        Info.getID(), Context);
+         LineIsMarkedWithNOLINTinMacro(Info.getSourceManager(),
+                                       Info.getLocation(), Info.getID(),
+                                       Context, AvoidIO);
 }
 
 } // namespace tidy
@@ -709,9 +735,9 @@ struct LessClangTidyError {
     const tooling::DiagnosticMessage &M1 = LHS.Message;
     const tooling::DiagnosticMessage &M2 = RHS.Message;
 
-    return
-      std::tie(M1.FilePath, M1.FileOffset, LHS.DiagnosticName, M1.Message) <
-      std::tie(M2.FilePath, M2.FileOffset, RHS.DiagnosticName, M2.Message);
+    return std::tie(M1.FilePath, M1.FileOffset, LHS.DiagnosticName,
+                    M1.Message) <
+           std::tie(M2.FilePath, M2.FileOffset, RHS.DiagnosticName, M2.Message);
   }
 };
 struct EqualClangTidyError {
