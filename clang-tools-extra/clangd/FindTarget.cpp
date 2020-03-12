@@ -37,6 +37,7 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/raw_ostream.h"
+#include <iterator>
 #include <utility>
 #include <vector>
 
@@ -76,6 +77,13 @@ std::vector<const NamedDecl *> getMembersReferencedViaDependentName(
     bool IsNonstaticMember) {
   if (!T)
     return {};
+  if (auto *ET = T->getAs<EnumType>()) {
+    std::vector<const NamedDecl *> Result;
+    llvm::copy(
+        ET->getDecl()->lookup(NameFactory(ET->getDecl()->getASTContext())),
+        std::back_inserter(Result));
+    return Result;
+  }
   if (auto *ICNT = T->getAs<InjectedClassNameType>()) {
     T = ICNT->getInjectedSpecializationType().getTypePtrOrNull();
   }
