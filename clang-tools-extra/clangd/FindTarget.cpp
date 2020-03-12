@@ -74,7 +74,7 @@ nodeToString(const ast_type_traits::DynTypedNode &N) {
 std::vector<const NamedDecl *> getMembersReferencedViaDependentName(
     const Type *T,
     llvm::function_ref<DeclarationName(ASTContext &)> NameFactory,
-    bool IsNonstaticMember) {
+    llvm::function_ref<bool(const NamedDecl *ND)> Filter) {
   if (!T)
     return {};
   if (auto *ET = T->getAs<EnumType>()) {
@@ -99,15 +99,22 @@ std::vector<const NamedDecl *> getMembersReferencedViaDependentName(
     return {};
   RD = RD->getDefinition();
   DeclarationName Name = NameFactory(RD->getASTContext());
-  return RD->lookupDependentName(Name, [=](const NamedDecl *D) {
-    return IsNonstaticMember ? D->isCXXInstanceMember()
-                             : !D->isCXXInstanceMember();
-  });
+  return RD->lookupDependentName(Name, Filter);
 }
 
-// Given the type T of a dependent expression that appears of the LHS of a "->",
-// heuristically find a corresponding pointee type in whose scope we could look
-// up the name appearing on the RHS.
+const auto NonStaticFilter = [](const NamedDecl *D) {
+  return D->isCXXInstanceMember();
+};
+const auto StaticFilter = [](const NamedDecl *D) {
+  return !D->isCXXInstanceMember();
+};
+const auto ValueFilter = [](const NamedDecl *D) {
+  return dyn_cast<ValueDecl>(D) != nullptr;
+};
+
+// Given the type T of a dependent expression that appears of the LHS of a
+// "->", heuristically find a corresponding pointee type in whose scope we
+// could look up the name appearing on the RHS.
 const Type *getPointeeType(const Type *T) {
   if (!T)
     return nullptr;
@@ -125,7 +132,7 @@ const Type *getPointeeType(const Type *T) {
       [](ASTContext &Ctx) {
         return Ctx.DeclarationNames.getCXXOperatorName(OO_Arrow);
       },
-      /*IsNonStaticMember=*/true);
+      NonStaticFilter);
   if (ArrowOps.empty())
     return nullptr;
 
@@ -272,6 +279,14 @@ public:
       // Record the underlying decl instead, if allowed.
       D = USD->getTargetDecl();
       Flags |= Rel::Underlying; // continue with the underlying decl.
+    } else if (const UnresolvedUsingValueDecl *UUVD =
+                   dyn_cast<UnresolvedUsingValueDecl>(D)) {
+      for (const NamedDecl *Target : getMembersReferencedViaDependentName(
+               UUVD->getQualifier()->getAsType(),
+               [UUVD](ASTContext &) { return UUVD->getNameInfo().getName(); },
+               ValueFilter)) {
+        add(Target, Flags | Rel::Underlying);
+      }
     }
 
     if (const Decl *Pat = getTemplatePattern(D)) {
@@ -341,7 +356,7 @@ public:
         }
         for (const NamedDecl *D : getMembersReferencedViaDependentName(
                  BaseType, [E](ASTContext &) { return E->getMember(); },
-                 /*IsNonstaticMember=*/true)) {
+                 NonStaticFilter)) {
           Outer.add(D, Flags);
         }
       }
@@ -349,7 +364,7 @@ public:
         for (const NamedDecl *D : getMembersReferencedViaDependentName(
                  E->getQualifier()->getAsType(),
                  [E](ASTContext &) { return E->getDeclName(); },
-                 /*IsNonstaticMember=*/false)) {
+                 StaticFilter)) {
           Outer.add(D, Flags);
         }
       }

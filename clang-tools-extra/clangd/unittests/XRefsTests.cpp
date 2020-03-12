@@ -244,6 +244,7 @@ TEST(LocateSymbol, All) {
   //   $def is the definition location (if absent, symbol has no definition)
   //   unnamed range becomes both $decl and $def.
   const char *Tests[] = {
+#if 0    
       R"cpp(// Local variable
         int main() {
           int [[bonjour]];
@@ -533,7 +534,19 @@ TEST(LocateSymbol, All) {
           enum class E { [[A]], B };
           E e = E::A^;
         };
-      )cpp"};
+      )cpp",
+#endif
+    R"cpp(// Member of dependent base
+        template <typename T>
+        struct Base {
+          void [[waldo]]() {}
+        };
+        template <typename T>
+        struct Derived : Base<T> {
+          using Base<T>::w^aldo;
+        };
+      )cpp"
+  };
   for (const char *Test : Tests) {
     Annotations T(Test);
     llvm::Optional<Range> WantDecl;
