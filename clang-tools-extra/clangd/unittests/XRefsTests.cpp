@@ -628,7 +628,8 @@ TEST(LocateSymbol, Textual) {
         // Comment mentioning M^yClass
       )cpp",
       R"cpp(// String
-        struct [[MyClass]] {};
+        struct MyClass {};
+        // Not triggered for string literal tokens.
         const char* s = "String literal mentioning M^yClass";
       )cpp",
       R"cpp(// Ifdef'ed out code
@@ -680,7 +681,7 @@ TEST(LocateSymbol, Textual) {
       EXPECT_EQ(Results[0].PreferredDeclaration.range, *WantDecl) << Test;
     }
   }
-}
+} // namespace
 
 TEST(LocateSymbol, Ambiguous) {
   auto T = Annotations(R"cpp(
