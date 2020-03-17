@@ -21,6 +21,7 @@
 #include "index/Relation.h"
 #include "index/SymbolLocation.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/ASTTypeTraits.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/Attrs.inc"
 #include "clang/AST/Decl.h"
@@ -273,6 +274,14 @@ locateASTReferent(SourceLocation CurLoc, const syntax::Token *TouchedIdentifier,
         AddResultDecl(CTSD->getSpecializedTemplate());
         continue;
       }
+    }
+
+    // Give the underlying decla if navigation is triggered on a non-renaming
+    // alias.
+    if (llvm::isa<UsingDecl>(D)) {
+      llvm::for_each(targetDecl(ast_type_traits::DynTypedNode::create(*D),
+                                DeclRelation::Underlying),
+                     [&](const NamedDecl *UD) { AddResultDecl(UD); });
     }
 
     // Otherwise the target declaration is the right one.

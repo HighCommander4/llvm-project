@@ -45,6 +45,11 @@ using ::testing::UnorderedElementsAreArray;
 MATCHER_P2(FileRange, File, Range, "") {
   return Location{URIForFile::canonicalize(File, testRoot()), Range} == arg;
 }
+MATCHER(DeclRange, "") {
+  const LocatedSymbol &Sym = ::testing::get<0>(arg);
+  const Range &Range = ::testing::get<1>(arg);
+  return Sym.PreferredDeclaration.range == Range;
+}
 
 // Extracts ranges from an annotated example, and constructs a matcher for a
 // highlight set. Ranges should be named $read/$write as appropriate.
@@ -688,15 +693,59 @@ TEST(LocateSymbol, Ambiguous) {
                                    Sym("baz", T.range("StaticOverload2"))));
 }
 
-TEST(LocateSymbol, TemplateTypedefs) {
-  auto T = Annotations(R"cpp(
-    template <class T> struct function {};
-    template <class T> using callback = function<T()>;
+TEST(LocateSymbol, Alias) {
+  const char *Tests[] = {
+    R"cpp(
+      template <class T> struct function {};
+      template <class T> using [[callback]] = function<T()>;
 
-    c^allback<int> foo;
-  )cpp");
-  auto AST = TestTU::withCode(T.code()).build();
-  EXPECT_THAT(locateSymbolAt(AST, T.point()), ElementsAre(Sym("callback")));
+      c^allback<int> foo;
+    )cpp",
+
+    // triggered on non-definition of a renaming alias: should not give any
+    // underlying decls.
+    R"cpp(
+      class Foo {};
+      typedef Foo [[Bar]];
+
+      B^ar b;
+    )cpp",
+    R"cpp(
+      class Foo {};
+      using [[Bar]] = Foo; // definition
+      Ba^r b;
+    )cpp",
+
+    // triggered on definition of a non-renaming alias: should give underlying
+    // decls.
+    R"cpp(
+      namespace ns { class [[Foo]] {}; }
+      using ns::[[F^oo]];
+    )cpp",
+
+    // other cases that don't matter much.
+    R"cpp(
+      class Foo {};
+      typedef Foo [[Ba^r]];
+    )cpp",
+    R"cpp(
+      class Foo {};
+      using [[B^ar]] = Foo;
+    )cpp",
+    R"cpp(
+      namespace ns { class [[Foo]] {}; }
+      using ns::Foo;
+      F^oo f;
+    )cpp",
+  };
+
+  for (const auto* Case : Tests) {
+    SCOPED_TRACE(Case);
+    auto T = Annotations(Case);
+    auto AST = TestTU::withCode(T.code()).build();
+    EXPECT_THAT(locateSymbolAt(AST, T.point()),
+                ::testing::UnorderedPointwise(DeclRange(), T.ranges()));
+  }
 }
 
 TEST(LocateSymbol, RelPathsInCompileCommand) {
