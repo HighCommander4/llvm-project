@@ -154,6 +154,7 @@ void checkDiffedHighlights(llvm::StringRef OldCode, llvm::StringRef NewCode) {
 
 TEST(SemanticHighlighting, GetsCorrectTokens) {
   const char *TestCases[] = {
+#if 0
       R"cpp(
       struct $Class[[AS]] {
         double $Field[[SomeMember]];
@@ -667,7 +668,27 @@ sizeof...($TemplateParameter[[Elements]]);
       void $Function[[bar]]($TemplateParameter[[T]] $Parameter[[F]]) {
         $Parameter[[F]].$DependentName[[foo]]();
       }
-    )cpp"};
+    )cpp",
+#endif
+    // Dependent name with explicit instantiation
+    R"cpp(
+      template <typename>
+      struct $Class[[Waldo]] {
+        struct $Class[[Nested]];
+        void $Method[[Find]]($Class[[Nested]]*);
+      };
+
+      template <typename $TemplateParameter[[Inner]]>
+      struct $Class[[Waldo]]<$TemplateParameter[[Inner]]>::$Class[[Nested]] {
+        $Class[[Waldo]]* $Field[[W]];
+        void $Method[[Find]]() { 
+          $Field[[W]]->$DependentName[[Find]](this); 
+        }
+      };
+
+      template struct $Class[[Waldo]]<int>;
+    )cpp",
+  };
   for (const auto &TestCase : TestCases) {
     checkHighlightings(TestCase);
   }
