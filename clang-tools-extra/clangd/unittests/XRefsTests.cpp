@@ -647,16 +647,6 @@ TEST(LocateSymbol, Textual) {
         int myFunction(int);
         // Not triggered for token which survived preprocessing.
         int var = m^yFunction();
-      )cpp",
-      R"cpp(// Dependent type
-        struct Foo {
-          void uniqueMethodName();
-        };
-        template <typename T>
-        void f(T t) {
-          // Not triggered for token which survived preprocessing.
-          t->u^niqueMethodName();
-        }
       )cpp"};
 
   for (const char *Test : Tests) {
@@ -672,7 +662,43 @@ TEST(LocateSymbol, Textual) {
     auto Results = locateSymbolNamedTextuallyAt(
         AST, Index.get(),
         cantFail(sourceLocationInMainFile(AST.getSourceManager(), T.point())),
-        testPath(TU.Filename));
+        testPath(TU.Filename), /*IsDependent=*/false);
+
+    if (!WantDecl) {
+      EXPECT_THAT(Results, IsEmpty()) << Test;
+    } else {
+      ASSERT_THAT(Results, ::testing::SizeIs(1)) << Test;
+      EXPECT_EQ(Results[0].PreferredDeclaration.range, *WantDecl) << Test;
+    }
+  }
+} // namespace
+
+TEST(LocateSymbol, TextualDependent) {
+  const char *Tests[] = {
+      R"cpp(// Dependent type
+        struct Foo {
+          void [[uniqueMethodName]]();
+        };
+        template <typename T>
+        void f(T t) {
+          t->u^niqueMethodName();
+        }
+      )cpp"};
+
+  for (const char *Test : Tests) {
+    Annotations T(Test);
+    llvm::Optional<Range> WantDecl;
+    if (!T.ranges().empty())
+      WantDecl = T.range();
+
+    auto TU = TestTU::withCode(T.code());
+
+    auto AST = TU.build();
+    auto Index = TU.index();
+    // Need to use locateSymbolAt() since we are testing an
+    // interaction between locateASTReferent() and
+    // locateSymbolNamedTextuallyAt().
+    auto Results = locateSymbolAt(AST, T.point(), Index.get());
 
     if (!WantDecl) {
       EXPECT_THAT(Results, IsEmpty()) << Test;
@@ -765,17 +791,18 @@ TEST(LocateSymbol, TextualAmbiguous) {
         struct Bar {
           void $BarLoc[[uniqueMethodName]]();
         };
-        // Will call u^niqueMethodName() on t.
         template <typename T>
-        void f(T t);
+        void f(T t) {
+          t.u^niqueMethodName();
+        }
       )cpp");
   auto TU = TestTU::withCode(T.code());
   auto AST = TU.build();
   auto Index = TU.index();
-  auto Results = locateSymbolNamedTextuallyAt(
-      AST, Index.get(),
-      cantFail(sourceLocationInMainFile(AST.getSourceManager(), T.point())),
-      testPath(TU.Filename));
+  // Need to use locateSymbolAt() since we are testing an
+  // interaction between locateASTReferent() and
+  // locateSymbolNamedTextuallyAt().
+  auto Results = locateSymbolAt(AST, T.point(), Index.get());
   EXPECT_THAT(Results,
               UnorderedElementsAre(Sym("uniqueMethodName", T.range("FooLoc")),
                                    Sym("uniqueMethodName", T.range("BarLoc"))));

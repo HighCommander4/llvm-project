@@ -22,6 +22,7 @@
 #include "index/Relation.h"
 #include "index/SymbolLocation.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/ASTTypeTraits.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/Attrs.inc"
 #include "clang/AST/Decl.h"
@@ -136,19 +137,31 @@ SymbolLocation getPreferredLocation(const Location &ASTLoc,
   return Merged.CanonicalDeclaration;
 }
 
-std::vector<const NamedDecl *> getDeclAtPosition(ParsedAST &AST,
-                                                 SourceLocation Pos,
-                                                 DeclRelationSet Relations) {
+bool isDependentName(const DynTypedNode &N) {
+  if (const Stmt *S = N.get<Stmt>()) {
+    return llvm::isa<OverloadExpr>(S) ||
+           llvm::isa<CXXDependentScopeMemberExpr>(S) ||
+           llvm::isa<DependentScopeDeclRefExpr>(S);
+  }
+  return false;
+}
+
+std::vector<const NamedDecl *>
+getDeclAtPosition(ParsedAST &AST, SourceLocation Pos, DeclRelationSet Relations,
+                  bool *IsDependentName = nullptr) {
   unsigned Offset = AST.getSourceManager().getDecomposedSpellingLoc(Pos).second;
   std::vector<const NamedDecl *> Result;
-  SelectionTree::createEach(AST.getASTContext(), AST.getTokens(), Offset,
-                            Offset, [&](SelectionTree ST) {
-                              if (const SelectionTree::Node *N =
-                                      ST.commonAncestor())
-                                llvm::copy(targetDecl(N->ASTNode, Relations),
-                                           std::back_inserter(Result));
-                              return !Result.empty();
-                            });
+  SelectionTree::createEach(
+      AST.getASTContext(), AST.getTokens(), Offset, Offset,
+      [&](SelectionTree ST) {
+        if (const SelectionTree::Node *N = ST.commonAncestor()) {
+          if (IsDependentName && isDependentName(N->ASTNode))
+            *IsDependentName = true;
+          llvm::copy(targetDecl(N->ASTNode, Relations),
+                     std::back_inserter(Result));
+        }
+        return !Result.empty();
+      });
   return Result;
 }
 
@@ -218,7 +231,7 @@ locateMacroReferent(const syntax::Token &TouchedIdentifier, ParsedAST &AST,
 std::vector<LocatedSymbol>
 locateASTReferent(SourceLocation CurLoc, const syntax::Token *TouchedIdentifier,
                   ParsedAST &AST, llvm::StringRef MainFilePath,
-                  const SymbolIndex *Index) {
+                  const SymbolIndex *Index, bool *IsDependentName) {
   const SourceManager &SM = AST.getSourceManager();
   // Results follow the order of Symbols.Decls.
   std::vector<LocatedSymbol> Result;
@@ -249,7 +262,8 @@ locateASTReferent(SourceLocation CurLoc, const syntax::Token *TouchedIdentifier,
   // Emit all symbol locations (declaration or definition) from AST.
   DeclRelationSet Relations =
       DeclRelation::TemplatePattern | DeclRelation::Alias;
-  for (const NamedDecl *D : getDeclAtPosition(AST, CurLoc, Relations)) {
+  for (const NamedDecl *D :
+       getDeclAtPosition(AST, CurLoc, Relations, IsDependentName)) {
     // Special case: void foo() ^override: jump to the overridden method.
     if (const auto *CMD = llvm::dyn_cast<CXXMethodDecl>(D)) {
       const InheritableAttr *Attr = D->getAttr<OverrideAttr>();
@@ -357,10 +371,9 @@ bool tokenSurvivedPreprocessing(SourceLocation Loc,
 
 } // namespace
 
-std::vector<LocatedSymbol>
-locateSymbolNamedTextuallyAt(ParsedAST &AST, const SymbolIndex *Index,
-                             SourceLocation Loc,
-                             const std::string &MainFilePath) {
+std::vector<LocatedSymbol> locateSymbolNamedTextuallyAt(
+    ParsedAST &AST, const SymbolIndex *Index, SourceLocation Loc,
+    const std::string &MainFilePath, bool IsDependent) {
   const auto &SM = AST.getSourceManager();
 
   // Get the raw word at the specified location.
@@ -389,8 +402,9 @@ locateSymbolNamedTextuallyAt(ParsedAST &AST, const SymbolIndex *Index,
   // Do not consider tokens that survived preprocessing.
   // We are erring on the safe side here, as a user may expect to get
   // accurate (as opposed to textual-heuristic) results for such tokens.
-  // FIXME: Relax this for dependent code.
-  if (tokenSurvivedPreprocessing(WordStart, AST.getTokens()))
+  // For dependent code, we relax this as a textual heuristic allows us
+  // to find results in cases where AST heuristics fall down.
+  if (!IsDependent && tokenSurvivedPreprocessing(WordStart, AST.getTokens()))
     return {};
 
   // Additionally filter for signals that the word is likely to be an
@@ -512,12 +526,14 @@ std::vector<LocatedSymbol> locateSymbolAt(ParsedAST &AST, Position Pos,
       // expansion.)
       return {*std::move(Macro)};
 
-  auto ASTResults =
-      locateASTReferent(*CurLoc, TouchedIdentifier, AST, *MainFilePath, Index);
+  bool IsDependentName = false;
+  auto ASTResults = locateASTReferent(*CurLoc, TouchedIdentifier, AST,
+                                      *MainFilePath, Index, &IsDependentName);
   if (!ASTResults.empty())
     return ASTResults;
 
-  return locateSymbolNamedTextuallyAt(AST, Index, *CurLoc, *MainFilePath);
+  return locateSymbolNamedTextuallyAt(AST, Index, *CurLoc, *MainFilePath,
+                                      IsDependentName);
 }
 
 std::vector<DocumentLink> getDocumentLinks(ParsedAST &AST) {

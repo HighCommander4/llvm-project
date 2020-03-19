@@ -62,7 +62,7 @@ std::vector<LocatedSymbol> locateSymbolAt(ParsedAST &AST, Position Pos,
 std::vector<LocatedSymbol>
 locateSymbolNamedTextuallyAt(ParsedAST &AST, const SymbolIndex *Index,
                              SourceLocation Loc,
-                             const std::string &MainFilePath);
+                             const std::string &MainFilePath, bool IsDependent);
 
 /// Get all document links
 std::vector<DocumentLink> getDocumentLinks(ParsedAST &AST);
