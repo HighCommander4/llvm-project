@@ -640,6 +640,15 @@ llvm::SmallVector<ReferenceLoc, 2> refInExpr(const Expr *E) {
                                   /*IsDecl=*/false,
                                   {E->getNamedConcept()}});
     }
+
+    void
+    VisitCXXDependentScopeMemberExpr(const CXXDependentScopeMemberExpr *E) {
+      Refs.push_back(
+          ReferenceLoc{E->getQualifierLoc(), E->getMemberNameInfo().getLoc(),
+                       /*IsDecl=*/false,
+                       explicitReferenceTargets(DynTypedNode::create(*E), {})});
+    }
+
     void VisitDeclRefExpr(const DeclRefExpr *E) {
       Refs.push_back(ReferenceLoc{E->getQualifierLoc(),
                                   E->getNameInfo().getLoc(),

@@ -655,6 +655,20 @@ sizeof...($TemplateParameter[[Elements]]);
             ::$DependentType[[Resolver]]::$DependentName[[Value]];
       };
     )cpp",
+      // Member of current instantiation
+      R"cpp(
+      template <typename>
+      struct $Class[[Foo]] {
+        int $Field[[Waldo]];
+        void $Method[[bar]]() {
+          $Class[[Foo]]().$Field[[Waldo]];
+        }
+        template <typename $TemplateParameter[[U]]>
+        void $Method[[bar1]]() {
+          $Class[[Foo]]<$TemplateParameter[[U]]>().$DependentName[[Waldo]];
+        }
+      };
+    )cpp",
       // Concepts
       R"cpp(
       template <typename $TemplateParameter[[T]]>
