@@ -117,6 +117,10 @@
             {
                 "command": "clangd-vscode.activate",
                 "title": "Manually activate clangd extension"
+            },
+            {
+                "command": "clangd-vscode.typeHierarchy",
+                "title": "Open Type Hierarchy"
             }
         ],
         "keybindings": [
@@ -126,6 +130,22 @@
                 "mac": "Alt+cmd+o",
                 "when": "editorTextFocus"
             }
-        ]
+        ],
+        "menus": {
+          "editor/context": [
+            {
+              "when": "resourceLangId == cpp",
+              "command": "clangd-vscode.typeHierarchy"
+            }
+          ]
+        },
+        "views": {
+          "explorer": [
+            {
+              "id": "clangd-vscode.typeHierarchyView",
+              "name": "Type Hierarchy"
+            }
+          ]
+        }
     }
 }

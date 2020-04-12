@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as vscodelc from 'vscode-languageclient';
 import * as semanticHighlighting from './semantic-highlighting';
+import * as typeHierarchy from './type-hierarchy';
 
 /**
  * Get an option from workspace configuration.
@@ -148,6 +149,7 @@ export function activate(context: vscode.ExtensionContext) {
     clangdClient.registerFeature(semanticHighlightingFeature);
   }
   clangdClient.registerFeature(new EnableEditsNearCursorFeature);
+  new typeHierarchy.TypeHierarchyProvider(context, clangdClient);
   console.log('Clang Language Server is now active!');
   context.subscriptions.push(clangdClient.start());
   context.subscriptions.push(vscode.commands.registerCommand(
