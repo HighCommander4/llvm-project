@@ -498,6 +498,22 @@ void ClangdLSPServer::onInitialize(const InitializeParams &Params,
     ClangdServerOpts.WorkspaceRoot = std::string(Params.rootUri->file());
   else if (Params.rootPath && !Params.rootPath->empty())
     ClangdServerOpts.WorkspaceRoot = *Params.rootPath;
+
+  if (ClangdServerOpts.WorkspaceRoot) {
+    // Add a suffix that will be unique for different workspace roots,
+    // to the command names registered via "executeCommandProvider".
+    // This facilitates multi-root use cases where a client wants to launch
+    // different server instances for different workspace roots.
+    // If all server instances use the same command name, the client can
+    // run into errors related to registering the same command multiple times.
+    // To generate the unique suffix, we reuse SymbolID's hashing mechanism
+    // (FIXME: do something more proper).
+    std::string UniqueSuffix =
+        "-" + SymbolID(*ClangdServerOpts.WorkspaceRoot).str();
+    ExecuteCommandParams::CLANGD_APPLY_FIX_COMMAND += UniqueSuffix;
+    ExecuteCommandParams::CLANGD_APPLY_TWEAK += UniqueSuffix;
+  }
+
   if (Server)
     return Reply(llvm::make_error<LSPError>("server already initialized",
                                             ErrorCode::InvalidRequest));

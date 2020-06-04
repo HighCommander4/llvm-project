@@ -464,7 +464,7 @@ bool fromJSON(const llvm::json::Value &Params, DidChangeTextDocumentParams &R) {
   llvm::json::ObjectMapper O(Params);
   if (!O)
     return false;
-  O.map("forceRebuild", R.forceRebuild);  // Optional clangd extension.
+  O.map("forceRebuild", R.forceRebuild); // Optional clangd extension.
   return O.map("textDocument", R.textDocument) &&
          O.map("contentChanges", R.contentChanges) &&
          O.map("wantDiagnostics", R.wantDiagnostics);
@@ -607,10 +607,8 @@ bool fromJSON(const llvm::json::Value &Params, WorkspaceEdit &R) {
   return O && O.map("changes", R.changes);
 }
 
-const llvm::StringLiteral ExecuteCommandParams::CLANGD_APPLY_FIX_COMMAND =
-    "clangd.applyFix";
-const llvm::StringLiteral ExecuteCommandParams::CLANGD_APPLY_TWEAK =
-    "clangd.applyTweak";
+std::string ExecuteCommandParams::CLANGD_APPLY_FIX_COMMAND = "clangd.applyFix";
+std::string ExecuteCommandParams::CLANGD_APPLY_TWEAK = "clangd.applyTweak";
 
 bool fromJSON(const llvm::json::Value &Params, ExecuteCommandParams &R) {
   llvm::json::ObjectMapper O(Params);
