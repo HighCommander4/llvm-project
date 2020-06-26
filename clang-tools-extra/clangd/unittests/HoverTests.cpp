@@ -1763,8 +1763,7 @@ TEST(Hover, All) {
             HI.Kind = index::SymbolKind::Field;
             HI.NamespaceScope = "ObjC::"; // FIXME: fix it
             HI.Definition = "char data";
-          }},
-  };
+          }}};
 
   // Create a tiny index, so tests above can verify documentation is fetched.
   Symbol IndexSym = func("indexSymbol");

@@ -58,50 +58,10 @@ nodeToString(const ast_type_traits::DynTypedNode &N) {
   return S;
 }
 
-// Given a dependent type and a member name, heuristically resolve the
-// name to one or more declarations.
-// The current heuristic is simply to look up the name in the primary
-// template. This is a heuristic because the template could potentially
-// have specializations that declare different members.
-// Multiple declarations could be returned if the name is overloaded
-// (e.g. an overloaded method in the primary template).
-// This heuristic will give the desired answer in many cases, e.g.
-// for a call to vector<T>::size().
-// The name to look up is provided in the form of a factory that takes
-// an ASTContext, because an ASTContext may be needed to obtain the
-// name (e.g. if it's an operator name), but the caller may not have
-// access to an ASTContext.
 std::vector<const NamedDecl *> getMembersReferencedViaDependentName(
-    const Type *T,
+    const Expr *E, const Type *T,
     llvm::function_ref<DeclarationName(ASTContext &)> NameFactory,
-    bool IsNonstaticMember) {
-  if (!T)
-    return {};
-  if (auto *ET = T->getAs<EnumType>()) {
-    auto Result =
-        ET->getDecl()->lookup(NameFactory(ET->getDecl()->getASTContext()));
-    return {Result.begin(), Result.end()};
-  }
-  if (auto *ICNT = T->getAs<InjectedClassNameType>()) {
-    T = ICNT->getInjectedSpecializationType().getTypePtrOrNull();
-  }
-  auto *TST = T->getAs<TemplateSpecializationType>();
-  if (!TST)
-    return {};
-  const ClassTemplateDecl *TD = dyn_cast_or_null<ClassTemplateDecl>(
-      TST->getTemplateName().getAsTemplateDecl());
-  if (!TD)
-    return {};
-  CXXRecordDecl *RD = TD->getTemplatedDecl();
-  if (!RD->hasDefinition())
-    return {};
-  RD = RD->getDefinition();
-  DeclarationName Name = NameFactory(RD->getASTContext());
-  return RD->lookupDependentName(Name, [=](const NamedDecl *D) {
-    return IsNonstaticMember ? D->isCXXInstanceMember()
-                             : !D->isCXXInstanceMember();
-  });
-}
+    bool IsNonstaticMember);
 
 // Given the type T of a dependent expression that appears of the LHS of a "->",
 // heuristically find a corresponding pointee type in whose scope we could look
@@ -119,7 +79,7 @@ const Type *getPointeeType(const Type *T) {
   // Look up operator-> in the primary template. If we find one, it's probably a
   // smart pointer type.
   auto ArrowOps = getMembersReferencedViaDependentName(
-      T,
+      nullptr, T,
       [](ASTContext &Ctx) {
         return Ctx.DeclarationNames.getCXXOperatorName(OO_Arrow);
       },
@@ -142,6 +102,104 @@ const Type *getPointeeType(const Type *T) {
   if (FirstArg.getKind() != TemplateArgument::Type)
     return nullptr;
   return FirstArg.getAsType().getTypePtrOrNull();
+}
+
+std::vector<const NamedDecl *> resolveDependentExprToDecls(const Expr *E) {
+  switch (E->getStmtClass()) {
+  case Stmt::CXXDependentScopeMemberExprClass: {
+    const auto *ME = llvm::cast<CXXDependentScopeMemberExpr>(E);
+    const Type *BaseType = ME->getBaseType().getTypePtrOrNull();
+    if (ME->isArrow()) {
+      BaseType = getPointeeType(BaseType);
+    }
+    return getMembersReferencedViaDependentName(
+        ME->getBase(), BaseType, [ME](ASTContext &) { return ME->getMember(); },
+        /*IsNonstaticMember=*/true);
+  }
+  case Stmt::DependentScopeDeclRefExprClass: {
+    const auto *RE = llvm::cast<DependentScopeDeclRefExpr>(E);
+    return getMembersReferencedViaDependentName(
+        nullptr, RE->getQualifier()->getAsType(),
+        [RE](ASTContext &) { return RE->getDeclName(); },
+        /*IsNonstaticMember=*/false);
+  }
+  default:
+    return {};
+  }
+}
+
+const Type *resolveDependentExprToType(const Expr *E) {
+  std::vector<const NamedDecl *> Decls = resolveDependentExprToDecls(E);
+  if (Decls.size() != 1)
+    return nullptr;
+  if (const auto *TD = dyn_cast<TypeDecl>(Decls[0])) {
+    return TD->getTypeForDecl();
+  } else if (const auto *FD = dyn_cast<FieldDecl>(Decls[0])) {
+    return FD->getType().getTypePtrOrNull();
+  }
+  return nullptr;
+}
+
+CXXRecordDecl *resolveTypeToRecordDecl(const Type *T) {
+  if (auto *RT = T->getAs<RecordType>()) {
+    return dyn_cast<CXXRecordDecl>(RT->getDecl());
+  }
+
+  if (auto *ICNT = T->getAs<InjectedClassNameType>()) {
+    T = ICNT->getInjectedSpecializationType().getTypePtrOrNull();
+  }
+  auto *TST = T->getAs<TemplateSpecializationType>();
+  if (!TST)
+    return nullptr;
+  const ClassTemplateDecl *TD = dyn_cast_or_null<ClassTemplateDecl>(
+      TST->getTemplateName().getAsTemplateDecl());
+  if (!TD)
+    return nullptr;
+  return TD->getTemplatedDecl();
+}
+
+// Given a dependent type and a member name, heuristically resolve the
+// name to one or more declarations.
+// The current heuristic is simply to look up the name in the primary
+// template. This is a heuristic because the template could potentially
+// have specializations that declare different members.
+// Multiple declarations could be returned if the name is overloaded
+// (e.g. an overloaded method in the primary template).
+// This heuristic will give the desired answer in many cases, e.g.
+// for a call to vector<T>::size().
+// The name to look up is provided in the form of a factory that takes
+// an ASTContext, because an ASTContext may be needed to obtain the
+// name (e.g. if it's an operator name), but the caller may not have
+// access to an ASTContext.
+std::vector<const NamedDecl *> getMembersReferencedViaDependentName(
+    const Expr *E, const Type *T,
+    llvm::function_ref<DeclarationName(ASTContext &)> NameFactory,
+    bool IsNonstaticMember) {
+  if (!T)
+    return {};
+  if (auto *BT = T->getAs<BuiltinType>()) {
+    if (E && BT->getKind() == BuiltinType::Dependent) {
+      T = resolveDependentExprToType(E);
+      if (!T)
+        return {};
+    }
+  }
+  if (auto *ET = T->getAs<EnumType>()) {
+    auto Result =
+        ET->getDecl()->lookup(NameFactory(ET->getDecl()->getASTContext()));
+    return {Result.begin(), Result.end()};
+  }
+  if (auto *RD = resolveTypeToRecordDecl(T)) {
+    if (!RD->hasDefinition())
+      return {};
+    RD = RD->getDefinition();
+    DeclarationName Name = NameFactory(RD->getASTContext());
+    return RD->lookupDependentName(Name, [=](const NamedDecl *D) {
+      return IsNonstaticMember ? D->isCXXInstanceMember()
+                               : !D->isCXXInstanceMember();
+    });
+  }
+  return {};
 }
 
 const NamedDecl *getTemplatePattern(const NamedDecl *D) {
@@ -341,21 +399,12 @@ public:
       }
       void
       VisitCXXDependentScopeMemberExpr(const CXXDependentScopeMemberExpr *E) {
-        const Type *BaseType = E->getBaseType().getTypePtrOrNull();
-        if (E->isArrow()) {
-          BaseType = getPointeeType(BaseType);
-        }
-        for (const NamedDecl *D : getMembersReferencedViaDependentName(
-                 BaseType, [E](ASTContext &) { return E->getMember(); },
-                 /*IsNonstaticMember=*/true)) {
+        for (const NamedDecl *D : resolveDependentExprToDecls(E)) {
           Outer.add(D, Flags);
         }
       }
       void VisitDependentScopeDeclRefExpr(const DependentScopeDeclRefExpr *E) {
-        for (const NamedDecl *D : getMembersReferencedViaDependentName(
-                 E->getQualifier()->getAsType(),
-                 [E](ASTContext &) { return E->getDeclName(); },
-                 /*IsNonstaticMember=*/false)) {
+        for (const NamedDecl *D : resolveDependentExprToDecls(E)) {
           Outer.add(D, Flags);
         }
       }
