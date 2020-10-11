@@ -1,3 +1,4 @@
+#include "Annotations.h"
 #include "CompileCommands.h"
 #include "Config.h"
 #include "Headers.h"
@@ -964,6 +965,114 @@ TEST(BackgroundQueueTest, Progress) {
   EXPECT_EQ(S.Enqueued, 2000u);
   EXPECT_EQ(S.Completed, 2000u);
   EXPECT_EQ(S.LastIdle, 2000u);
+}
+
+// Helpers for matching call hierarchy data structures.
+using ::testing::Field;
+MATCHER_P(WithName, N, "") { return arg.Name == N; }
+MATCHER_P(WithSelectionRange, R, "") { return arg.SelectionRange == R; }
+
+template <class ItemMatcher>
+::testing::Matcher<CallHierarchyIncomingCall> From(ItemMatcher M) {
+  return Field(&CallHierarchyIncomingCall::From, M);
+}
+template <class... RangeMatchers>
+::testing::Matcher<CallHierarchyIncomingCall> FromRanges(RangeMatchers... M) {
+  return Field(&CallHierarchyIncomingCall::FromRanges,
+               UnorderedElementsAre(M...));
+}
+
+TEST_F(BackgroundIndexTest, CallHierarchyIncomingCalls) {
+  Annotations CalleeH(R"cpp(
+    void calle^e(int);
+  )cpp");
+  Annotations CalleeC(R"cpp(
+    #include "callee.h"
+    void calle^e(int) {}
+  )cpp");
+  Annotations Caller1H(R"cpp(
+    void caller1();
+  )cpp");
+  Annotations Caller1C(R"cpp(
+    #include "callee.h"
+    #include "caller1.h"
+    void caller1() {
+      [[calle^e]](42);
+    }
+  )cpp");
+  Annotations Caller2H(R"cpp(
+    void caller2();
+  )cpp");
+  Annotations Caller2C(R"cpp(
+    #include "caller1.h"
+    #include "caller2.h"
+    void caller2() {
+      $A[[caller1]]();
+      $B[[caller1]]();
+    }
+  )cpp");
+  Annotations Caller3C(R"cpp(
+    #include "caller1.h"
+    #include "caller2.h"
+    void caller3() {
+      $Caller1[[caller1]]();
+      $Caller2[[caller2]]();
+    }
+  )cpp");
+
+  TestWorkspace Workspace(
+      {{"callee", std::string(CalleeH.code()), std::string(CalleeC.code())},
+       {"caller1", std::string(Caller1H.code()), std::string(Caller1C.code())},
+       {"caller2", std::string(Caller2H.code()), std::string(Caller2C.code())},
+       {"caller3", "", std::string(Caller3C.code())}});
+
+  SymbolIndex *Index = Workspace.index();
+
+  auto CheckCallHierarchy = [&](ParsedAST &AST, Position Pos, PathRef TUPath) {
+    llvm::Optional<std::vector<CallHierarchyItem>> Items =
+        prepareCallHierarchy(AST, Pos, Index, TUPath);
+    ASSERT_TRUE(bool(Items));
+    EXPECT_THAT(*Items, ElementsAre(WithName("callee")));
+    auto IncomingLevel1 = incomingCalls((*Items)[0], Index);
+    ASSERT_TRUE(bool(IncomingLevel1));
+    EXPECT_THAT(*IncomingLevel1,
+                ElementsAre(AllOf(From(WithName("caller1")),
+                                  FromRanges(Caller1C.range()))));
+
+    auto IncomingLevel2 = incomingCalls((*IncomingLevel1)[0].From, Index);
+    ASSERT_TRUE(bool(IncomingLevel2));
+    EXPECT_THAT(*IncomingLevel2,
+                UnorderedElementsAre(
+                    AllOf(From(WithName("caller2")),
+                          FromRanges(Caller2C.range("A"), Caller2C.range("B"))),
+                    AllOf(From(WithName("caller3")),
+                          FromRanges(Caller3C.range("Caller1")))));
+
+    auto IncomingLevel3 = incomingCalls((*IncomingLevel2)[0].From, Index);
+    ASSERT_TRUE(bool(IncomingLevel3));
+    EXPECT_THAT(*IncomingLevel3,
+                ElementsAre(AllOf(From(WithName("caller3")),
+                                  FromRanges(Caller3C.range("Caller2")))));
+
+    auto IncomingLevel4 = incomingCalls((*IncomingLevel3)[0].From, Index);
+    ASSERT_TRUE(bool(IncomingLevel4));
+    EXPECT_THAT(*IncomingLevel4, ElementsAre());
+  };
+
+  // Check that invoking from a call site works.
+  auto AST = Workspace.openFile("caller1.cc");
+  ASSERT_TRUE(bool(AST));
+  CheckCallHierarchy(*AST, Caller1C.point(), testPath("caller1.cc"));
+
+  // Check that invoking from the declaration site works.
+  AST = Workspace.openFile("callee.h");
+  ASSERT_TRUE(bool(AST));
+  CheckCallHierarchy(*AST, CalleeH.point(), testPath("callee.h"));
+
+  // Check that invoking from the definition site works.
+  AST = Workspace.openFile("callee.cc");
+  ASSERT_TRUE(bool(AST));
+  CheckCallHierarchy(*AST, CalleeC.point(), testPath("callee.cc"));
 }
 
 } // namespace clangd
