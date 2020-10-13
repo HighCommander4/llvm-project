@@ -89,6 +89,73 @@ protected:
   BackgroundIndexTest() { BackgroundQueue::preventThreadStarvationInTests(); }
 };
 
+class TestWorkspace {
+public:
+  struct HeaderSourcePair {
+    std::string BaseName;
+    std::string HeaderCode;
+    std::string SourceCode;
+
+    std::string headerFilename() const { return BaseName + ".h"; }
+    std::string sourceFilename() const { return BaseName + ".cc"; }
+  };
+
+  TestWorkspace(std::vector<HeaderSourcePair> &&Inputs)
+      : Inputs(std::move(Inputs)), MSS(Storage, CacheHits),
+        CDB(/*Base=*/nullptr) {
+    for (auto &Input : this->Inputs) {
+      FS.Files[testPath("root/" + Input.headerFilename())] = Input.HeaderCode;
+      FS.Files[testPath("root/" + Input.sourceFilename())] = Input.SourceCode;
+    }
+    Index = std::make_unique<BackgroundIndex>(
+        FS, CDB,
+        BackgroundIndexStorage::Factory([&](llvm::StringRef) { return &MSS; }),
+        BackgroundIndex::Options{});
+    for (auto &Input : this->Inputs) {
+      tooling::CompileCommand Cmd;
+      Cmd.Filename = testPath("root/" + Input.sourceFilename());
+      Cmd.Directory = testPath("root");
+      Cmd.CommandLine = {"clang++", Cmd.Filename};
+      CDB.setCompileCommand(Cmd.Filename, Cmd);
+      EXPECT_TRUE(Index->blockUntilIdleForTest());
+    }
+  }
+
+  SymbolIndex *index() const { return Index.get(); }
+
+  Optional<ParsedAST> openFile(llvm::StringRef Filename) {
+    HeaderSourcePair *Input = findFile(Filename);
+    if (!Input)
+      return llvm::None;
+    bool IsHeader = (Filename == Input->headerFilename());
+    TestTU TU;
+    TU.Code = IsHeader ? Input->HeaderCode : Input->SourceCode;
+    TU.Filename = "root/" + std::string(Filename);
+    for (auto &Input : Inputs) {
+      TU.AdditionalFiles.insert(
+          std::make_pair("root/" + Input.headerFilename(), Input.HeaderCode));
+    }
+    return TU.build();
+  }
+
+private:
+  std::vector<HeaderSourcePair> Inputs;
+  MockFS FS;
+  llvm::StringMap<std::string> Storage;
+  size_t CacheHits = 0;
+  MemoryShardStorage MSS;
+  OverlayCDB CDB;
+  std::unique_ptr<BackgroundIndex> Index;
+
+  HeaderSourcePair *findFile(llvm::StringRef Filename) {
+    for (auto &Input : Inputs)
+      if (Filename == Input.headerFilename() ||
+          Filename == Input.sourceFilename())
+        return &Input;
+    return nullptr;
+  }
+};
+
 TEST_F(BackgroundIndexTest, NoCrashOnErrorFile) {
   MockFS FS;
   FS.Files[testPath("root/A.cc")] = "error file";
@@ -230,45 +297,28 @@ TEST_F(BackgroundIndexTest, IndexTwoFiles) {
 }
 
 TEST_F(BackgroundIndexTest, RelationsMultiFile) {
-  MockFS FS;
-  FS.Files[testPath("root/Base.h")] = "class Base {};";
-  FS.Files[testPath("root/A.cc")] = R"cpp(
+  TestWorkspace Workspace({{"Base", "class Base {};", ""},
+                           {"A", "", R"cpp(
     #include "Base.h"
     class A : public Base {};
-  )cpp";
-  FS.Files[testPath("root/B.cc")] = R"cpp(
+  )cpp"},
+                           {"B", "", R"cpp(
     #include "Base.h"
     class B : public Base {};
-  )cpp";
+  )cpp"}});
 
-  llvm::StringMap<std::string> Storage;
-  size_t CacheHits = 0;
-  MemoryShardStorage MSS(Storage, CacheHits);
-  OverlayCDB CDB(/*Base=*/nullptr);
-  BackgroundIndex Index(FS, CDB, [&](llvm::StringRef) { return &MSS; },
-                        /*Opts=*/{});
-
-  tooling::CompileCommand Cmd;
-  Cmd.Filename = testPath("root/A.cc");
-  Cmd.Directory = testPath("root");
-  Cmd.CommandLine = {"clang++", Cmd.Filename};
-  CDB.setCompileCommand(testPath("root/A.cc"), Cmd);
-  ASSERT_TRUE(Index.blockUntilIdleForTest());
-
-  Cmd.Filename = testPath("root/B.cc");
-  Cmd.CommandLine = {"clang++", Cmd.Filename};
-  CDB.setCompileCommand(testPath("root/B.cc"), Cmd);
-  ASSERT_TRUE(Index.blockUntilIdleForTest());
-
-  auto HeaderShard = MSS.loadShard(testPath("root/Base.h"));
-  EXPECT_NE(HeaderShard, nullptr);
-  SymbolID Base = findSymbol(*HeaderShard->Symbols, "Base").ID;
+  SymbolIndex *Index = Workspace.index();
+  FuzzyFindRequest FFReq;
+  FFReq.Query = "Base";
+  FFReq.AnyScope = true;
+  SymbolID Base;
+  Index->fuzzyFind(FFReq, [&](const Symbol &S) { Base = S.ID; });
 
   RelationsRequest Req;
   Req.Subjects.insert(Base);
   Req.Predicate = RelationKind::BaseOf;
   uint32_t Results = 0;
-  Index.relations(Req, [&](const SymbolID &, const Symbol &) { ++Results; });
+  Index->relations(Req, [&](const SymbolID &, const Symbol &) { ++Results; });
   EXPECT_EQ(Results, 2u);
 }
 
