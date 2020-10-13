@@ -344,7 +344,9 @@ bool SymbolCollector::handleDeclOccurrence(
       !isa<NamespaceDecl>(ND) &&
       (Opts.RefsInHeaders ||
        SM.getFileID(SM.getFileLoc(Loc)) == SM.getMainFileID()))
-    DeclRefs[ND].emplace_back(SM.getFileLoc(Loc), Roles);
+    DeclRefs[ND].push_back(
+        SymbolRef{SM.getFileLoc(Loc), Roles,
+                  dyn_cast_or_null<NamedDecl>(ASTNode.Parent)});
   // Don't continue indexing if this is a mere reference.
   if (IsOnlyRef)
     return true;
@@ -422,7 +424,8 @@ bool SymbolCollector::handleMacroOccurrence(const IdentifierInfo *Name,
   // Do not store references to main-file macros.
   if ((static_cast<unsigned>(Opts.RefFilter) & Roles) && !IsMainFileOnly &&
       (Opts.RefsInHeaders || SM.getFileID(SpellingLoc) == SM.getMainFileID()))
-    MacroRefs[*ID].push_back({Loc, Roles});
+    // FIXME: Populate referrer information for macro references.
+    MacroRefs[*ID].push_back({Loc, Roles, /*Referrer=*/nullptr});
 
   // Collect symbols.
   if (!Opts.CollectMacro)
@@ -582,24 +585,23 @@ void SymbolCollector::finish() {
     }
     return Found->second;
   };
-  auto CollectRef =
-      [&](SymbolID ID,
-          const std::pair<SourceLocation, index::SymbolRoleSet> &LocAndRole,
-          bool Spelled = false) {
-        auto FileID = SM.getFileID(LocAndRole.first);
-        // FIXME: use the result to filter out references.
-        shouldIndexFile(FileID);
-        if (auto FileURI = GetURI(FileID)) {
-          auto Range =
-              getTokenRange(LocAndRole.first, SM, ASTCtx->getLangOpts());
-          Ref R;
-          R.Location.Start = Range.first;
-          R.Location.End = Range.second;
-          R.Location.FileURI = FileURI->c_str();
-          R.Kind = toRefKind(LocAndRole.second, Spelled);
-          Refs.insert(ID, R);
-        }
-      };
+  auto CollectRef = [&](SymbolID ID, const SymbolRef &LocAndRole,
+                        bool Spelled = false) {
+    auto FileID = SM.getFileID(LocAndRole.Loc);
+    // FIXME: use the result to filter out references.
+    shouldIndexFile(FileID);
+    if (auto FileURI = GetURI(FileID)) {
+      auto Range = getTokenRange(LocAndRole.Loc, SM, ASTCtx->getLangOpts());
+      Ref R;
+      R.Location.Start = Range.first;
+      R.Location.End = Range.second;
+      R.Location.FileURI = FileURI->c_str();
+      R.Kind = toRefKind(LocAndRole.Roles, Spelled);
+      if (auto RefID = getSymbolID(LocAndRole.Referrer))
+        R.Referrer = *RefID;
+      Refs.insert(ID, R);
+    }
+  };
   // Populate Refs slab from MacroRefs.
   // FIXME: All MacroRefs are marked as Spelled now, but this should be checked.
   for (const auto &IDAndRefs : MacroRefs)
@@ -610,7 +612,7 @@ void SymbolCollector::finish() {
   for (auto &DeclAndRef : DeclRefs) {
     if (auto ID = getSymbolID(DeclAndRef.first)) {
       for (auto &LocAndRole : DeclAndRef.second) {
-        const auto FileID = SM.getFileID(LocAndRole.first);
+        const auto FileID = SM.getFileID(LocAndRole.Loc);
         // FIXME: It's better to use TokenBuffer by passing spelled tokens from
         // the caller of SymbolCollector.
         if (!FilesToTokensCache.count(FileID))
@@ -620,7 +622,7 @@ void SymbolCollector::finish() {
         // Check if the referenced symbol is spelled exactly the same way the
         // corresponding NamedDecl is. If it is, mark this reference as spelled.
         const auto *IdentifierToken =
-            spelledIdentifierTouching(LocAndRole.first, Tokens);
+            spelledIdentifierTouching(LocAndRole.Loc, Tokens);
         DeclarationName Name = DeclAndRef.first->getDeclName();
         const auto NameKind = Name.getNameKind();
         bool IsTargetKind = NameKind == DeclarationName::Identifier ||

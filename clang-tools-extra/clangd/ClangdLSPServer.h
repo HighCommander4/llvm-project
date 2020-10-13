@@ -115,6 +115,15 @@ private:
                        Callback<llvm::Optional<TypeHierarchyItem>>);
   void onResolveTypeHierarchy(const ResolveTypeHierarchyItemParams &,
                               Callback<llvm::Optional<TypeHierarchyItem>>);
+  void onPrepareCallHierarchy(
+      const CallHierarchyPrepareParams &,
+      Callback<llvm::Optional<std::vector<CallHierarchyItem>>>);
+  void onCallHierarchyIncomingCalls(
+      const CallHierarchyIncomingCallsParams &,
+      Callback<llvm::Optional<std::vector<CallHierarchyIncomingCall>>>);
+  void onCallHierarchyOutgoingCalls(
+      const CallHierarchyOutgoingCallsParams &,
+      Callback<llvm::Optional<std::vector<CallHierarchyOutgoingCall>>>);
   void onChangeConfiguration(const DidChangeConfigurationParams &);
   void onSymbolInfo(const TextDocumentPositionParams &,
                     Callback<std::vector<SymbolDetails>>);

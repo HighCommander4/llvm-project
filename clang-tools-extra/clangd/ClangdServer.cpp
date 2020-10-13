@@ -683,6 +683,30 @@ void ClangdServer::resolveTypeHierarchy(
   CB(Item);
 }
 
+void ClangdServer::prepareCallHierarchy(
+    PathRef File, Position Pos,
+    Callback<llvm::Optional<std::vector<CallHierarchyItem>>> CB) {
+  auto Action = [File = File.str(), Pos, CB = std::move(CB),
+                 this](Expected<InputsAndAST> InpAST) mutable {
+    if (!InpAST)
+      return CB(InpAST.takeError());
+    CB(clangd::prepareCallHierarchy(InpAST->AST, Pos, Index, File));
+  };
+  WorkScheduler.runWithAST("Call Hierarchy", File, std::move(Action));
+}
+
+void ClangdServer::incomingCalls(
+    const CallHierarchyItem &Item,
+    Callback<llvm::Optional<std::vector<CallHierarchyIncomingCall>>> CB) {
+  CB(clangd::incomingCalls(Item, Index));
+}
+
+void ClangdServer::outgoingCalls(
+    const CallHierarchyItem &Item,
+    Callback<llvm::Optional<std::vector<CallHierarchyOutgoingCall>>> CB) {
+  CB(clangd::outgoingCalls(Item, Index));
+}
+
 void ClangdServer::onFileEvent(const DidChangeWatchedFilesParams &Params) {
   // FIXME: Do nothing for now. This will be used for indexing and potentially
   // invalidating other caches.

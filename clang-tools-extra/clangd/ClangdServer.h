@@ -244,6 +244,21 @@ public:
                             TypeHierarchyDirection Direction,
                             Callback<llvm::Optional<TypeHierarchyItem>> CB);
 
+  /// Get information about call hierarchy for a given position.
+  void prepareCallHierarchy(
+      PathRef File, Position Pos,
+      Callback<llvm::Optional<std::vector<CallHierarchyItem>>> CB);
+
+  /// Resolve incoming calls for a given call hierarchy item.
+  void incomingCalls(
+      const CallHierarchyItem &Item,
+      Callback<llvm::Optional<std::vector<CallHierarchyIncomingCall>>>);
+
+  /// Resolve outgoing calls for a given call hierarchy item.
+  void outgoingCalls(
+      const CallHierarchyItem &Item,
+      Callback<llvm::Optional<std::vector<CallHierarchyOutgoingCall>>>);
+
   /// Retrieve the top symbols from the workspace matching a query.
   void workspaceSymbols(StringRef Query, int Limit,
                         Callback<std::vector<SymbolInformation>> CB);

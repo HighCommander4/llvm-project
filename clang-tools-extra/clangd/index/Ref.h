@@ -88,13 +88,16 @@ struct Ref {
   /// The source location where the symbol is named.
   SymbolLocation Location;
   RefKind Kind = RefKind::Unknown;
+  SymbolID Referrer;
 };
 
 inline bool operator<(const Ref &L, const Ref &R) {
-  return std::tie(L.Location, L.Kind) < std::tie(R.Location, R.Kind);
+  return std::tie(L.Location, L.Kind, L.Referrer) <
+         std::tie(R.Location, R.Kind, R.Referrer);
 }
 inline bool operator==(const Ref &L, const Ref &R) {
-  return std::tie(L.Location, L.Kind) == std::tie(R.Location, R.Kind);
+  return std::tie(L.Location, L.Kind, L.Referrer) ==
+         std::tie(R.Location, R.Kind, R.Referrer);
 }
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &, const Ref &);

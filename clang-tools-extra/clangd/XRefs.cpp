@@ -5,7 +5,6 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-#include "XRefs.h"
 #include "AST.h"
 #include "CodeCompletionStrings.h"
 #include "FindSymbols.h"
@@ -16,6 +15,7 @@
 #include "Selection.h"
 #include "SourceCode.h"
 #include "URI.h"
+#include "XRefs.h"
 #include "index/Index.h"
 #include "index/Merge.h"
 #include "index/Relation.h"
@@ -47,6 +47,7 @@
 #include "clang/Index/USRGeneration.h"
 #include "clang/Tooling/Syntax/Tokens.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/None.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
@@ -1312,9 +1313,8 @@ declToTypeHierarchyItem(ASTContext &Ctx, const NamedDecl &ND) {
   return THI;
 }
 
-static Optional<TypeHierarchyItem>
-symbolToTypeHierarchyItem(const Symbol &S, const SymbolIndex *Index,
-                          PathRef TUPath) {
+static Optional<TypeHierarchyItem> symbolToTypeHierarchyItem(const Symbol &S,
+                                                             PathRef TUPath) {
   auto Loc = symbolToLocation(S, TUPath);
   if (!Loc) {
     log("Type hierarchy: {0}", Loc.takeError());
@@ -1345,7 +1345,7 @@ static void fillSubTypes(const SymbolID &ID,
   Req.Predicate = RelationKind::BaseOf;
   Index->relations(Req, [&](const SymbolID &Subject, const Symbol &Object) {
     if (Optional<TypeHierarchyItem> ChildSym =
-            symbolToTypeHierarchyItem(Object, Index, TUPath)) {
+            symbolToTypeHierarchyItem(Object, TUPath)) {
       if (Levels > 1) {
         ChildSym->children.emplace();
         fillSubTypes(Object.ID, *ChildSym->children, Index, Levels - 1, TUPath);
@@ -1537,6 +1537,199 @@ void resolveTypeHierarchy(TypeHierarchyItem &Item, int ResolveLevels,
       fillSubTypes(*ID, *Item.children, Index, ResolveLevels, Item.uri.file());
     }
   }
+}
+
+static llvm::Optional<CallHierarchyItem>
+declToCallHierarchyItem(ASTContext &Ctx, const NamedDecl &ND) {
+  auto &SM = Ctx.getSourceManager();
+  SourceLocation NameLoc = nameLocation(ND, Ctx.getSourceManager());
+  SourceLocation BeginLoc = SM.getSpellingLoc(SM.getFileLoc(ND.getBeginLoc()));
+  SourceLocation EndLoc = SM.getSpellingLoc(SM.getFileLoc(ND.getEndLoc()));
+  const auto DeclRange =
+      toHalfOpenFileRange(SM, Ctx.getLangOpts(), {BeginLoc, EndLoc});
+  if (!DeclRange)
+    return llvm::None;
+  auto FilePath =
+      getCanonicalPath(SM.getFileEntryForID(SM.getFileID(NameLoc)), SM);
+  auto TUPath = getCanonicalPath(SM.getFileEntryForID(SM.getMainFileID()), SM);
+  if (!FilePath || !TUPath)
+    return llvm::None; // Not useful without a uri.
+
+  Position NameBegin = sourceLocToPosition(SM, NameLoc);
+  Position NameEnd = sourceLocToPosition(
+      SM, Lexer::getLocForEndOfToken(NameLoc, 0, SM, Ctx.getLangOpts()));
+
+  index::SymbolInfo SymInfo = index::getSymbolInfo(&ND);
+  // FIXME: this is not classifying constructors, destructors and operators
+  //        correctly (they're all "methods").
+  SymbolKind SK = indexSymbolKindToSymbolKind(SymInfo.Kind);
+
+  CallHierarchyItem CHI;
+  // We need to print the fully qualified name, otherwise we can't recover
+  // the symbol from the CallHierarchyItem.
+  CHI.Name = printQualifiedName(ND);
+  CHI.Kind = SK;
+  if (ND.isDeprecated()) {
+    CHI.Tags.push_back(SymbolTag::Deprecated);
+  }
+  CHI.Rng = Range{sourceLocToPosition(SM, DeclRange->getBegin()),
+                  sourceLocToPosition(SM, DeclRange->getEnd())};
+  CHI.SelectionRange = Range{NameBegin, NameEnd};
+  if (!CHI.Rng.contains(CHI.Rng)) {
+    // 'selectionRange' must be contained in 'range', so in cases where clang
+    // reports unrelated ranges we need to reconcile somehow.
+    CHI.Rng = CHI.SelectionRange;
+  }
+
+  CHI.Uri = URIForFile::canonicalize(*FilePath, *TUPath);
+
+  return CHI;
+}
+
+llvm::Optional<std::vector<CallHierarchyItem>>
+prepareCallHierarchy(ParsedAST &AST, Position Pos, const SymbolIndex *Index,
+                     PathRef TUPath) {
+  const auto &SM = AST.getSourceManager();
+  auto Loc = sourceLocationInMainFile(SM, Pos);
+  if (!Loc) {
+    llvm::consumeError(Loc.takeError());
+    return llvm::None;
+  }
+  std::vector<CallHierarchyItem> Result;
+  for (const NamedDecl *Decl : getDeclAtPosition(AST, *Loc, {})) {
+    if (Decl->isFunctionOrFunctionTemplate()) {
+      if (auto CHI = declToCallHierarchyItem(AST.getASTContext(), *Decl))
+        Result.push_back(*std::move(CHI));
+    }
+  }
+  return Result;
+}
+
+static llvm::Optional<Symbol>
+callHierarchyItemToSymbol(const CallHierarchyItem &Item,
+                          const SymbolIndex *Index) {
+  FuzzyFindRequest Request;
+  auto Split = splitQualifiedName(Item.Name);
+  Request.Query = std::string(Split.second);
+  if (!Split.first.empty())
+    Request.Scopes = {std::string(Split.first)};
+  // Explain.
+  Request.AnyScope = true;
+  llvm::Optional<Symbol> Result;
+  bool Found = false;
+  auto OnFuzzyMatch = [&](const Symbol &S) {
+    if (Found)
+      return;
+    if (S.Name != Split.second)
+      return;
+
+    auto LocationMatches = [&](const SymbolLocation &L) {
+      if (!L)
+        return false;
+      auto Loc = indexToLSPLocation(L, Item.Uri.file());
+      if (Loc) {
+        vlog("Comparing locations {0}:{1} and {2}:{3}", Loc->uri.uri(),
+             Loc->range, Item.Uri.uri(), Item.SelectionRange);
+      }
+      return Loc && Loc->uri == Item.Uri && Loc->range == Item.SelectionRange;
+    };
+    if (!(LocationMatches(S.Definition) ||
+          LocationMatches(S.CanonicalDeclaration)))
+      return;
+
+    Result = S;
+    Found = true;
+  };
+  Index->fuzzyFind(Request, OnFuzzyMatch);
+  /*if (!Found && !Request.AnyScope) {
+    // If we didn't find any results when searching with AnyScope=false,
+    // fall back on trying AnyScope=true.
+    // This is a workaround for the fact that symbols in anonymous
+    // namespaces are not found inside a scope that comes from printing
+    // their qualifier (which omits anonymous namespaces).
+    Request.AnyScope = true;
+    Index->fuzzyFind(Request, OnFuzzyMatch);
+  }*/
+  return Result;
+}
+
+llvm::Optional<CallHierarchyItem> symbolToCallHierarchyItem(const Symbol &S,
+                                                            PathRef TUPath) {
+  auto Loc = symbolToLocation(S, TUPath);
+  if (!Loc) {
+    log("Type hierarchy: {0}", Loc.takeError());
+    return llvm::None;
+  }
+  CallHierarchyItem CHI;
+  CHI.Name = std::string(S.Name);
+  CHI.Kind = indexSymbolKindToSymbolKind(S.SymInfo.Kind);
+  if (S.Flags & Symbol::Deprecated)
+    CHI.Tags.push_back(SymbolTag::Deprecated);
+  CHI.Detail = S.Signature.str();
+  CHI.SelectionRange = Loc->range;
+  // FIXME: Populate 'range' correctly
+  // (https://github.com/clangd/clangd/issues/59).
+  CHI.Rng = CHI.SelectionRange;
+  CHI.Uri = Loc->uri;
+
+  return std::move(CHI);
+}
+
+llvm::Optional<std::vector<CallHierarchyIncomingCall>>
+incomingCalls(const CallHierarchyItem &Item, const SymbolIndex *Index) {
+  // Unlike TypeHierarchyItem, CallHierarchyItem does not have a "data"
+  // field into which we can stash a SymbolID (and we can't unilaterally
+  // add one because client implementations of call hierarchy, e.g. the
+  // one in vscode, don't know about it and wouldn't round-trip it).
+  // So, we have to reconstitute the symbol based on the information
+  // present in the CallHierarchyItem.
+  if (!Index)
+    return llvm::None;
+  auto Sym = callHierarchyItemToSymbol(Item, Index);
+  if (!Sym)
+    return llvm::None;
+  RefsRequest Request;
+  Request.IDs.insert(Sym->ID);
+  // FIXME: Perhaps we should be even more specific and introduce a
+  // RefKind for calls, and use that?
+  Request.Filter = RefKind::Reference;
+  // Initially store the results in a map keyed by SymbolID.
+  // This allows us to group different calls with the same caller
+  // into the same CallHierarchyIncomingCall.
+  llvm::DenseMap<SymbolID, CallHierarchyIncomingCall> ResultMap;
+  Index->refs(Request, [&](const Ref &R) {
+    if (auto Loc = indexToLSPLocation(R.Location, Item.Uri.file())) {
+      LookupRequest Lookup;
+      Lookup.IDs.insert(R.Referrer);
+      Index->lookup(Lookup, [&](const Symbol &Caller) {
+        // See if we already have a CallHierarchyIncomingCall for this caller.
+        auto It = ResultMap.find(Caller.ID);
+        if (It == ResultMap.end()) {
+          // If not, try to create one.
+          if (auto CHI = symbolToCallHierarchyItem(Caller, Item.Uri.file())) {
+            CallHierarchyIncomingCall Call;
+            Call.From = *CHI;
+            It = ResultMap.insert({Caller.ID, std::move(Call)}).first;
+          }
+        }
+        if (It != ResultMap.end()) {
+          It->second.FromRanges.push_back(Loc->range);
+        }
+      });
+    }
+  });
+  // Flatten the results into a vector.
+  std::vector<CallHierarchyIncomingCall> Results;
+  for (auto &&Entry : ResultMap) {
+    Results.push_back(std::move(Entry.second));
+  }
+  return Results;
+}
+
+llvm::Optional<std::vector<CallHierarchyOutgoingCall>>
+outgoingCalls(const CallHierarchyItem &Item, const SymbolIndex *Index) {
+  // TODO: Implement.
+  return llvm::None;
 }
 
 llvm::DenseSet<const Decl *> getNonLocalDeclRefs(ParsedAST &AST,

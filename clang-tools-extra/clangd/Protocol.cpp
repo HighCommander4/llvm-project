@@ -464,7 +464,7 @@ bool fromJSON(const llvm::json::Value &Params, DidChangeTextDocumentParams &R) {
   llvm::json::ObjectMapper O(Params);
   if (!O)
     return false;
-  O.map("forceRebuild", R.forceRebuild);  // Optional clangd extension.
+  O.map("forceRebuild", R.forceRebuild); // Optional clangd extension.
   return O.map("textDocument", R.textDocument) &&
          O.map("contentChanges", R.contentChanges) &&
          O.map("wantDiagnostics", R.wantDiagnostics);
@@ -1165,6 +1165,49 @@ bool fromJSON(const llvm::json::Value &Params,
 bool fromJSON(const llvm::json::Value &Params, ReferenceParams &R) {
   TextDocumentPositionParams &Base = R;
   return fromJSON(Params, Base);
+}
+
+llvm::json::Value toJSON(SymbolTag Tag) {
+  return llvm::json::Value{static_cast<int>(Tag)};
+}
+
+llvm::json::Value toJSON(const CallHierarchyItem &I) {
+  return llvm::json::Object{
+      {"name", I.Name}, {"kind", static_cast<int>(I.Kind)},
+      {"tags", I.Tags}, {"detail", I.Detail},
+      {"range", I.Rng}, {"selectionRange", I.SelectionRange},
+      {"uri", I.Uri}};
+}
+
+bool fromJSON(const llvm::json::Value &Params, CallHierarchyItem &I) {
+  llvm::json::ObjectMapper O(Params);
+
+  // Populate the required fields only. We don't care about the
+  // optional fields `Tags` and `Detail` for the purpose of
+  // client --> server communication.
+  return O && O.map("name", I.Name) && O.map("kind", I.Kind) &&
+         O.map("uri", I.Uri) && O.map("range", I.Rng) &&
+         O.map("selectionRange", I.SelectionRange);
+}
+
+llvm::json::Value toJSON(const CallHierarchyIncomingCall &C) {
+  return llvm::json::Object{{"from", C.From}, {"fromRanges", C.FromRanges}};
+}
+
+llvm::json::Value toJSON(const CallHierarchyOutgoingCall &C) {
+  return llvm::json::Object{{"from", C.To}, {"fromRanges", C.FromRanges}};
+}
+
+bool fromJSON(const llvm::json::Value &Params,
+              CallHierarchyIncomingCallsParams &P) {
+  llvm::json::ObjectMapper O(Params);
+  return O.map("item", P.Item);
+}
+
+bool fromJSON(const llvm::json::Value &Params,
+              CallHierarchyOutgoingCallsParams &P) {
+  llvm::json::ObjectMapper O(Params);
+  return O.map("item", P.Item);
 }
 
 static const char *toString(OffsetEncoding OE) {
