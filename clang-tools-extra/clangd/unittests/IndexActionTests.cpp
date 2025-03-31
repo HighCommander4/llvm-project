@@ -85,7 +85,7 @@ public:
     llvm::IntrusiveRefCntPtr<FileManager> Files(
         new FileManager(FileSystemOptions(), InMemoryFileSystem));
 
-    auto Action = createStaticIndexingAction(
+    auto Action = createIndexingAction(
         Opts, [&](SymbolSlab S) { IndexFile.Symbols = std::move(S); },
         [&](RefSlab R) { IndexFile.Refs = std::move(R); },
         [&](RelationSlab R) { IndexFile.Relations = std::move(R); },

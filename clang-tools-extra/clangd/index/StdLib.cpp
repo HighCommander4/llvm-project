@@ -235,9 +235,9 @@ SymbolSlab indexStandardLibrary(llvm::StringRef HeaderSources,
   // everything first.
 
   // Refs, relations, include graph in the stdlib mostly aren't useful.
-  auto Action = createStaticIndexingAction(
+  auto Action = createIndexingAction(
       IndexOpts, [&](SymbolSlab S) { Symbols = std::move(S); }, nullptr,
-      nullptr, nullptr);
+      nullptr, nullptr, IndexActionKind::Stdlib);
 
   if (!Action->BeginSourceFile(*Clang, Input)) {
     elog("Standard Library Index: BeginSourceFile() failed");

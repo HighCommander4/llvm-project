@@ -65,7 +65,7 @@ public:
       std::lock_guard<std::mutex> Lock(FilesMu);
       return Files.insert(*AbsPath).second; // Skip already processed files.
     };
-    return createStaticIndexingAction(
+    return createIndexingAction(
         Opts,
         [&](SymbolSlab S) {
           // Merge as we go.

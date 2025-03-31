@@ -209,12 +209,13 @@ private:
 
 } // namespace
 
-std::unique_ptr<FrontendAction> createStaticIndexingAction(
-    SymbolCollector::Options Opts,
-    std::function<void(SymbolSlab)> SymbolsCallback,
-    std::function<void(RefSlab)> RefsCallback,
-    std::function<void(RelationSlab)> RelationsCallback,
-    std::function<void(IncludeGraph)> IncludeGraphCallback) {
+std::unique_ptr<FrontendAction>
+createIndexingAction(SymbolCollector::Options Opts,
+                     std::function<void(SymbolSlab)> SymbolsCallback,
+                     std::function<void(RefSlab)> RefsCallback,
+                     std::function<void(RelationSlab)> RelationsCallback,
+                     std::function<void(IncludeGraph)> IncludeGraphCallback,
+                     IndexActionKind Kind) {
   index::IndexingOptions IndexOpts;
   IndexOpts.SystemSymbolFilter =
       index::IndexingOptions::SystemSymbolFilterKind::All;
@@ -223,7 +224,7 @@ std::unique_ptr<FrontendAction> createStaticIndexingAction(
   Opts.CollectIncludePath = true;
   if (Opts.Origin == SymbolOrigin::Unknown)
     Opts.Origin = SymbolOrigin::Static;
-  Opts.StoreAllDocumentation = false;
+  Opts.StoreAllDocumentation = (Kind == IndexActionKind::Stdlib);
   if (RefsCallback != nullptr) {
     Opts.RefFilter = RefKind::All;
     Opts.RefsInHeaders = true;

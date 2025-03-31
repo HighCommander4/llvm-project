@@ -308,7 +308,7 @@ llvm::Error BackgroundIndex::index(tooling::CompileCommand Cmd) {
   IndexOpts.CollectMainFileRefs = true;
 
   IndexFileIn Index;
-  auto Action = createStaticIndexingAction(
+  auto Action = createIndexingAction(
       IndexOpts, [&](SymbolSlab S) { Index.Symbols = std::move(S); },
       [&](RefSlab R) { Index.Refs = std::move(R); },
       [&](RelationSlab R) { Index.Relations = std::move(R); },
