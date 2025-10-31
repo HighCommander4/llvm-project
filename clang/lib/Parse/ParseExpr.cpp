@@ -902,7 +902,7 @@ Parser::ParseCastExpression(CastParseKind ParseKind, bool isAddressOfOperand,
                Next.isOneOf(tok::coloncolon, tok::less, tok::l_paren,
                             tok::l_brace)) {
         // If TryAnnotateTypeOrScopeToken annotates the token, tail recurse.
-        if (TryAnnotateTypeOrScopeToken())
+        if (TryAnnotateTypeOrScopeToken(isAddressOfOperand))
           return ExprError();
         if (!Tok.is(tok::identifier))
           return ParseCastExpression(ParseKind, isAddressOfOperand, NotCastExpr,
@@ -1527,7 +1527,8 @@ Parser::ParseCastExpression(CastParseKind ParseKind, bool isAddressOfOperand,
   case tok::code_completion: {
     cutOffParsing();
     Actions.CodeCompletion().CodeCompleteExpression(
-        getCurScope(), PreferredType.get(Tok.getLocation()));
+        getCurScope(), PreferredType.get(Tok.getLocation()),
+        /*IsParenthesized=*/false, /*IsAddressOfOperand=*/isAddressOfOperand);
     return ExprError();
   }
 #define TRANSFORM_TYPE_TRAIT_DEF(_, Trait) case tok::kw___##Trait:
